@@ -1,0 +1,929 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex, nofollow">
+<title>CRM Zuccardi · Presentación al cliente</title>
+<link rel="icon" type="image/png" href="/brand/favicon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@400;600;700&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  html, body { height: 100%; background: #1d1b22; overflow: hidden; font-family: 'IBM Plex Sans', Arial, sans-serif; }
+  #stage { position: fixed; inset: 0; display: flex; align-items: center; justify-content: center; }
+  #canvas { position: relative; width: 1920px; height: 1080px; transform-origin: center center; flex: none; }
+  .slide { position: absolute !important; inset: 0; width: 1920px; height: 1080px; overflow: hidden; }
+  .slide:not(.active) { display: none !important; }
+  /* Igual que el formato de slides: los hijos en flujo pintan sobre los fondos fijados que van antes */
+  .slide > :not([style*="position:absolute"]) { position: relative; }
+  .slide aside { display: none; }
+  .slide h1 { font-size: 96px; font-weight: 600; line-height: 1.1; }
+  .slide h2 { font-size: 64px; font-weight: 600; line-height: 1.15; }
+  .slide h3 { font-size: 44px; font-weight: 600; line-height: 1.2; }
+  .slide p { font-size: 32px; line-height: 1.4; }
+  .slide div:not([style*="display"]) { display: flex; flex-direction: column; }
+  .slide img { display: block; }
+  .slide table { width: 100%; border-collapse: collapse; }
+  .slide th, .slide td { padding: 0.35em 0.6em; border-bottom: 1px solid #e3d9cc; vertical-align: top; text-align: left; }
+  .slide th { font-weight: 600; }
+  #bar { position: fixed; left: 0; bottom: 0; height: 4px; background: #c98b95; transition: width .25s; z-index: 5; }
+  #hud { position: fixed; right: 16px; bottom: 14px; display: flex; gap: 8px; align-items: center; z-index: 6; opacity: .25; transition: opacity .2s; }
+  #hud:hover, body.ui #hud { opacity: 1; }
+  #hud button, #hud span { font: 500 13px 'IBM Plex Sans', Arial, sans-serif; color: #f6f2ec; background: rgba(29,27,34,.75); border: 1px solid rgba(246,242,236,.25); border-radius: 8px; padding: 6px 10px; cursor: pointer; }
+  #hud span { cursor: default; }
+  #notes { position: fixed; left: 16px; right: 16px; bottom: 56px; max-height: 32vh; overflow: auto; background: rgba(246,242,236,.97); color: #1d1b22; border-radius: 12px; padding: 16px 20px; font-size: 16px; line-height: 1.5; display: none; z-index: 7; box-shadow: 0 10px 40px rgba(0,0,0,.4); }
+  #notes b { color: #8a2b3a; display: block; margin-bottom: 4px; font-size: 12px; letter-spacing: .12em; text-transform: uppercase; }
+  body.notes #notes { display: block; }
+  #help { position: fixed; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(29,27,34,.7); z-index: 8; }
+  body.help #help { display: flex; }
+  #help div { background: #fbf8f3; border-radius: 14px; padding: 24px 28px; font-size: 15px; line-height: 1.9; color: #1d1b22; }
+  #help kbd { background: #e9e1d6; border-radius: 4px; padding: 1px 6px; font-family: inherit; font-weight: 600; }
+  @media print {
+    html, body { overflow: visible; background: #fff; }
+    #stage { position: static; display: block; }
+    #canvas { transform: none !important; width: auto; height: auto; }
+    .slide { position: relative !important; page-break-after: always; }
+    .slide:not(.active) { display: flex !important; }
+    #hud, #bar, #notes, #help { display: none !important; }
+    @page { size: 1920px 1080px; margin: 0; }
+  }
+  /* Módulo Inteligencia del CRM: maquetas de pantalla dibujadas en HTML (mismo tamaño que las capturas /help/*.jpg) */
+  .slide .mk { width: 960px; height: 661px; flex: none; border-radius: 14px; border: 1px solid #e3d9cc; box-shadow: 0 12px 40px rgba(63,19,28,0.12); background: #f8f5f0; overflow: hidden; font-family: 'IBM Plex Sans', Arial, sans-serif; font-size: 14px; line-height: 1.4; color: #1d1b22; }
+  .slide .mk div { display: block; }
+  .slide .mk p { font-size: inherit; line-height: inherit; }
+  .slide .mk .row { display: flex; flex-direction: row; align-items: center; gap: 10px; }
+  .slide .mk .col { display: flex; flex-direction: column; gap: 10px; }
+  .slide .mk .top { display: flex; flex-direction: row; align-items: center; gap: 14px; height: 46px; flex: none; padding: 0 16px; background: #fbf8f3; border-bottom: 1px solid #e9e1d6; }
+  .slide .mk .search { flex-direction: row; width: 330px; height: 30px; border: 1px solid #e3d9cc; border-radius: 8px; background: #fff; color: #8a8390; font-size: 12.5px; display: flex; align-items: center; padding: 0 12px; }
+  .slide .mk .jde { margin-left: auto; background: #e3f1f1; color: #23555a; border-radius: 99px; padding: 3px 11px; font-size: 12px; font-weight: 600; }
+  .slide .mk .av { width: 30px; height: 30px; border-radius: 50%; background: #8a2b3a; color: #fff; font-size: 12px; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+  .slide .mk .who { font-size: 12.5px; font-weight: 600; line-height: 1.2; }
+  .slide .mk .who span { display: block; font-size: 11px; font-weight: 400; color: #6b6470; }
+  .slide .mk .body { display: flex; flex-direction: column; gap: 11px; padding: 14px 20px 16px; height: 613px; }
+  .slide .mk .crumb { font-size: 11.5px; color: #6b6470; }
+  .slide .mk .h { font-family: 'Source Serif 4', Georgia, serif; font-size: 23px; font-weight: 600; line-height: 1.15; }
+  .slide .mk .sub { font-size: 12px; color: #6b6470; }
+  .slide .mk .card { background: #fff; border: 1px solid #e9e1d6; border-radius: 10px; padding: 12px 14px; }
+  .slide .mk .ch { font-size: 11.5px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; color: #4a4550; }
+  .slide .mk .pill { display: inline-block; border-radius: 99px; padding: 1px 9px; font-size: 11.5px; font-weight: 600; border: 1px solid transparent; white-space: nowrap; }
+  .slide .mk .red { background: #fbe9eb; color: #a3263a; border-color: #f1c7cd; }
+  .slide .mk .amber { background: #fff6dc; color: #8a6100; border-color: #f2dfa6; }
+  .slide .mk .green { background: #e6f4ea; color: #2e7d4f; border-color: #c4e3cf; }
+  .slide .mk .teal { background: #e3f1f1; color: #23555a; border-color: #c6e0e1; }
+  .slide .mk .wine { background: #f3e6e8; color: #722231; border-color: #e7cdd2; }
+  .slide .mk .gray { background: #f1ece5; color: #4a4550; border-color: #e3d9cc; }
+  .slide .mk .ia { background: #ece8f6; color: #4b3a8c; border-color: #d8d0ee; }
+  .slide .mk .btn { display: inline-block; border: 1px solid #d9cfc2; border-radius: 8px; padding: 5px 11px; background: #fff; font-size: 12.5px; font-weight: 600; color: #1d1b22; white-space: nowrap; }
+  .slide .mk .btn.pri { background: #8a2b3a; border-color: #8a2b3a; color: #fff; }
+  .slide .mk .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; display: inline-block; }
+  .slide .mk .muted { color: #6b6470; }
+  .slide .mk .small { font-size: 12px; }
+  .slide .mk .tabs { display: flex; flex-direction: row; gap: 22px; border-bottom: 1px solid #e3d9cc; font-size: 13px; color: #4a4550; }
+  .slide .mk .tabs span { padding: 0 0 7px; }
+  .slide .mk .tabs .on { color: #8a2b3a; font-weight: 600; border-bottom: 2px solid #8a2b3a; }
+  .slide .mk .bar { height: 7px; border-radius: 99px; background: #ece5db; overflow: hidden; }
+  .slide .mk .bar i { display: block; height: 100%; border-radius: 99px; background: #2d6a70; }
+  .slide .mk .chk { width: 14px; height: 14px; border: 1.5px solid #b9afa3; border-radius: 3px; flex: none; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div id="stage"><div id="canvas">
+<section class="slide" id="cover" data-transition="fade" style="background:#3f131c;color:#f6f2ec;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:space-between">
+<div style="position:absolute;left:1180px;top:-220px;width:980px;height:980px;border-radius:50%;background:#5a1b27"></div>
+<div style="position:absolute;left:1480px;top:560px;width:620px;height:620px;border-radius:50%;background:#722231"></div>
+<img src="/brand/zuccardi-light.png" alt="Zuccardi Valle de Uco" style="width:360px;height:159px;object-fit:contain">
+<div style="display:flex;flex-direction:column;gap:32px;width:1150px">
+<p style="font-size:28px;letter-spacing:4px;text-transform:uppercase;color:#d9a7af;font-weight:600">Maqueta funcional · reunión con Zuccardi</p>
+<h1 style="font-family:'Source Serif 4', Georgia, serif;font-size:96px;font-weight:600;line-height:1.08;color:#f6f2ec">CRM comercial a medida, integrado con JD Edwards</h1>
+<p style="font-size:36px;line-height:1.4;color:#e8d9d3">Recorrido por la plataforma, paso a paso, y cobertura del MVP de la Matriz Funcional</p>
+</div>
+<div style="display:flex;align-items:center;gap:24px">
+<div style="background:#f6f2ec;border-radius:12px;padding:12px 18px;display:flex"><img src="/brand/eisplus.png" alt="EISPLUS" style="width:150px;height:56px;object-fit:contain"></div>
+<p style="font-size:26px;color:#e8d9d3">Presentado por EISPLUS · octubre de 2026</p>
+</div>
+<aside>Abrir con el objetivo de la reunión: responder la pregunta de Fernando — ¿el MVP se cumple con el CRM desarrollado a medida? Vamos a mostrar la plataforma funcionando (maqueta navegable con datos ficticios y JD Edwards simulado con las mismas orquestaciones de la propuesta) y, en cada pantalla, qué puntos MVP de la matriz cubre. Link de la demo: https://crm-zuccardi.eisplus.com.ar</aside>
+</section>
+<section class="slide" id="agenda" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px 128px 160px;display:flex;flex-direction:column;gap:64px">
+<div style="display:flex;flex-direction:column;gap:12px">
+<p style="font-size:26px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Agenda</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.15;color:#1d1b22">Qué vamos a ver hoy</h2>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:28px">
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-radius:20px;padding:44px;display:flex;flex-direction:column;gap:20px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:72px;font-weight:600;color:#8a2b3a;line-height:1">1</p>
+<h3 style="font-size:36px;font-weight:600;line-height:1.2;color:#1d1b22">El planteo</h3>
+<p style="font-size:28px;line-height:1.45;color:#4a4550">Los cinco dolores del documento de fuerza de ventas y cómo se reparten el trabajo el CRM y JD Edwards.</p>
+</div>
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-radius:20px;padding:44px;display:flex;flex-direction:column;gap:20px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:72px;font-weight:600;color:#8a2b3a;line-height:1">2</p>
+<h3 style="font-size:36px;font-weight:600;line-height:1.2;color:#1d1b22">El recorrido</h3>
+<p style="font-size:28px;line-height:1.45;color:#4a4550">Un día del vendedor de punta a punta, en las pantallas reales, con los puntos MVP que cubre cada paso.</p>
+</div>
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-radius:20px;padding:44px;display:flex;flex-direction:column;gap:20px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:72px;font-weight:600;color:#8a2b3a;line-height:1">3</p>
+<h3 style="font-size:36px;font-weight:600;line-height:1.2;color:#1d1b22">La cobertura</h3>
+<p style="font-size:28px;line-height:1.45;color:#4a4550">La Matriz Funcional sección por sección: qué se ve en pantalla, qué está simulado y qué es parcial.</p>
+</div>
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-radius:20px;padding:44px;display:flex;flex-direction:column;gap:20px">
+<p style="font-family:'Source Serif 4', Georgia, serif;font-size:72px;font-weight:600;color:#8a2b3a;line-height:1">4</p>
+<h3 style="font-size:36px;font-weight:600;line-height:1.2;color:#1d1b22">Lo que sigue</h3>
+<p style="font-size:28px;line-height:1.45;color:#4a4550">Inteligencia del CRM: cinco casos de uso para retener, crecer, ahorrar tiempo y cuidar el margen.</p>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">Demo navegable: crm-zuccardi.eisplus.com.ar</p>
+<aside>Cuatro bloques: el planteo (cinco minutos), el recorrido por la plataforma (el grueso de la reunión; se puede alternar entre las slides y la demo en vivo) y la cobertura del MVP. Cerramos con lo que sigue: el módulo de Inteligencia del CRM.</aside>
+</section>
+<section class="slide" id="pedido" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 128px;display:flex;flex-direction:column;gap:44px">
+<div style="display:flex;flex-direction:column;gap:12px">
+<p style="font-size:26px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">El planteo</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:60px;font-weight:600;line-height:1.15;color:#1d1b22">Cinco dolores del negocio, cinco respuestas en el CRM</h2>
+</div>
+<table style="font-size:27px;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr style="background:#3f131c"><th style="width:40%;color:#f6f2ec;text-align:left">Lo que hoy duele</th><th style="width:60%;color:#f6f2ec;text-align:left">Cómo queda en el CRM</th></tr>
+<tr style="background:#ffffff"><td>Oportunidades dispersas y sin motivos de pérdida</td><td>Pipeline único por etapa, con valorización anual, competidor y motivo de pérdida</td></tr>
+<tr style="background:#f3ede4"><td>Información fragmentada al vender</td><td>Ficha única con saldo, crédito, stock y pedidos leídos de JDE en el momento</td></tr>
+<tr style="background:#ffffff"><td>Poca visibilidad de la actividad de calle</td><td>Visitas con check-in, agenda, rutas por frecuencia y relevamientos con fotos</td></tr>
+<tr style="background:#f3ede4"><td>Aprobaciones lentas y sin control</td><td>Circuitos configurables para altas, notas de crédito, límites, bajas y pedidos retenidos</td></tr>
+<tr style="background:#ffffff"><td>Conocimiento que se va con el vendedor</td><td>Historial institucional de cada cliente: visitas, WhatsApp, correos, reclamos y acuerdos</td></tr>
+</table>
+<p style="font-size:26px;color:#4a4550;line-height:1.4">Volúmenes de diseño: <b>4.000 clientes · 1.000 oportunidades por año · 600 SKU · 3.000 pedidos por mes</b></p>
+<aside>Tomado del documento “Resumen de necesidades de CRM FZ” enviado por Fernando Leiva. La idea es contar la solución por lo que el negocio necesita resolver, no por punto de la matriz; el cruce punto por punto viene al final.</aside>
+</section>
+<section class="slide" id="arquitectura" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 128px;display:flex;flex-direction:column;gap:44px">
+<div style="display:flex;flex-direction:column;gap:12px">
+<p style="font-size:26px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">El planteo</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:60px;font-weight:600;line-height:1.15;color:#1d1b22">El CRM no reemplaza a JD Edwards: lo complementa</h2>
+</div>
+<div style="display:flex;gap:28px;align-items:stretch">
+<div style="flex:1;background:#ffffff;border:1px solid #e3d9cc;border-top:8px solid #8a2b3a;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:36px;font-weight:600;color:#8a2b3a">CRM a medida</h3>
+<p style="font-size:26px;line-height:1.45;color:#4a4550">Relación con el cliente, actividad de calle, oportunidades, cotización, aprobaciones, objetivos y alertas.</p>
+</div>
+<div style="flex:1;background:#eef6f6;border:1px solid #d3e8e9;border-top:8px solid #2d6a70;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:36px;font-weight:600;color:#23555a">Integración</h3>
+<p style="font-size:26px;line-height:1.45;color:#4a4550">Orquestaciones estándar de Oracle (AIS / Orchestrator). Nada se escribe en JDE por fuera de sus aplicaciones. Todo queda trazado.</p>
+</div>
+<div style="flex:1;background:#ffffff;border:1px solid #e3d9cc;border-top:8px solid #1d1b22;border-radius:16px;padding:36px;display:flex;flex-direction:column;gap:16px">
+<h3 style="font-size:36px;font-weight:600;color:#1d1b22">JD Edwards</h3>
+<p style="font-size:26px;line-height:1.45;color:#4a4550">Sistema rector: clientes, crédito, precios y promociones, stock, pedidos y facturación.</p>
+</div>
+</div>
+<div style="display:flex;gap:28px">
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#2d6a70;font-weight:600">En vivo</p><p style="font-size:26px;line-height:1.4;color:#1d1b22">Lo que el vendedor consulta delante del cliente: cuenta corriente, crédito, stock, estado del pedido.</p></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#2d6a70;font-weight:600">Por evento, en segundos</p><p style="font-size:26px;line-height:1.4;color:#1d1b22">Lo que el CRM envía a JDE: altas aprobadas, pedidos, notas de crédito, límites.</p></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-size:24px;letter-spacing:2px;text-transform:uppercase;color:#2d6a70;font-weight:600">Programado</p><p style="font-size:26px;line-height:1.4;color:#1d1b22">Lo masivo: catálogo, ventas facturadas para objetivos y segmentación, alertas del día.</p></div>
+</div>
+<aside>Premisa del documento de Fernando: el CRM no sustituye ni compite con JDE. Los datos de JDE se ven en el CRM marcados como “JDE” y son de solo lectura. Si JDE no responde, el CRM sigue funcionando con la última foto sincronizada e indica de qué hora es (se puede mostrar en vivo con “Simular caída de JDE” en la consola).</aside>
+</section>
+<section class="slide" id="mvp-numeros" data-transition="fade" style="background:#5a1b27;color:#f6f2ec;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:space-between">
+<div style="display:flex;flex-direction:column;gap:12px">
+<p style="font-size:26px;letter-spacing:3px;text-transform:uppercase;color:#d9a7af;font-weight:600">La respuesta corta</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:64px;font-weight:600;line-height:1.15;color:#f6f2ec;width:1500px">Sí: el MVP se cumple con el CRM desarrollado a medida</h2>
+</div>
+<div style="display:flex;gap:40px">
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:140px;font-weight:600;line-height:1;color:#f6f2ec">72</p><p style="font-size:28px;line-height:1.35;color:#e8d9d3">puntos MVP en la matriz funcional (de 78)</p></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:140px;font-weight:600;line-height:1;color:#f6f2ec">68</p><p style="font-size:28px;line-height:1.35;color:#e8d9d3">se recorren hoy en la maqueta, en pantalla</p></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:140px;font-weight:600;line-height:1;color:#f6f2ec">3</p><p style="font-size:28px;line-height:1.35;color:#e8d9d3">canales externos simulados: WhatsApp, correo y BI</p></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:140px;font-weight:600;line-height:1;color:#f6f2ec">1</p><p style="font-size:28px;line-height:1.35;color:#e8d9d3">parcial: cambios del pedido después de enviado a JDE</p></div>
+</div>
+<p style="font-size:26px;color:#e8d9d3;line-height:1.4">Los 4 puntos de la app móvil son Fase 1 en la matriz y también se muestran (3 completos, 1 parcial).</p>
+<aside>Responde la pregunta de Fernando por mail: “respecto al CRM que ustedes desarrollaron, ¿el MVP se cumple?”. Los 3 simulados son integraciones con plataformas externas que en la maqueta no se conectan de verdad (WhatsApp Business de Meta, correo Microsoft 365, MicroStrategy); su funcionalidad se ve en pantalla. El parcial es el 4.1.9 (gestión de cambios del pedido después de enviado al ERP): se muestra la modificación de líneas mientras JDE lo permite; el circuito completo depende de cómo esté configurado P4210 en Zuccardi.</aside>
+</section>
+<section class="slide" id="recorrido" data-transition="fade" style="background:#3f131c;color:#f6f2ec;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:40px">
+<p style="font-size:28px;letter-spacing:4px;text-transform:uppercase;color:#d9a7af;font-weight:600">El recorrido</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:96px;font-weight:600;line-height:1.08;color:#f6f2ec;width:1400px">Un día del vendedor, de punta a punta</h2>
+<p style="font-size:34px;line-height:1.45;color:#e8d9d3;width:1300px">Del WhatsApp de la clienta al pedido en JD Edwards, la retención por crédito y su aprobación. Cada pantalla indica qué puntos MVP de la matriz cubre.</p>
+<aside>Caso que recorre toda la demo: Vinoteca La Cava SRL (AN8 61044), cartera de Juan Pérez, Mendoza Centro. Datos ficticios pero coherentes con el informe de cobertura v3.1. Se puede alternar: mostrar la slide y luego la misma pantalla en vivo.</aside>
+</section>
+<section class="slide" id="s-midia" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 1 · Empezar el día</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Las alertas del día, calculadas con datos de JDE</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">A las 08:00 se revisa la cartera en JDE: retenidos, vencidos, crédito al límite, inactivos, quiebres de mix y ritmo del objetivo.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Cada alerta trae su evidencia y un botón para actuar: pedir liberación, armar presupuesto, agendar visita.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Llega también por correo y WhatsApp. Los umbrales los define Zuccardi, sin programar.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">2.1.4 Alertas de inactividad<br>4.2.2 Alertas de quiebre de mix<br>4.2.3 Cross-selling y up-selling<br>5.7 Alertas de ritmo de ventas</p>
+</div>
+</div>
+<img src="/help/midia.jpg" alt="Pantalla Mi día con objetivo del mes, alertas y agenda" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Mi día · como Juan Pérez (vendedor, Mendoza Centro)</p>
+<aside>Mostrar Mi día como Juan Pérez. Primera alerta: SO 12135 de La Cava retenido por límite de crédito. Mostrar que cada alerta trae evidencia (F4201, F03B11) y la acción. La IA solo redacta; las reglas corren sobre datos de JDE y cada cifra se verifica.</aside>
+</section>
+<section class="slide" id="s-ficha" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 2 · Conocer al cliente</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Ficha única, con JD Edwards en vivo</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Saldo, vencido, crédito disponible, retención y pedidos abiertos, leídos de JDE en el momento.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Resumen con IA verificado: cada señal cita su evidencia (facturas, pedidos, promociones).</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Perfil comercial: líneas compradas, frecuencia, objetivo anual, promociones ofrecidas e historial completo.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">2.1.2 Ficha completa del cliente<br>2.1.6 Promociones ofrecidas<br>2.1.7 Historial de interacciones<br>2.1.8 Objetivo anual del cliente<br>1.3 Historial, entrega y facturación</p>
+</div>
+</div>
+<img src="/help/ficha-resumen.jpg" alt="Ficha de Vinoteca La Cava con el Panel JDE y el perfil comercial" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Clientes → Vinoteca La Cava SRL</p>
+<aside>La Cava: saldo USD 12.340,50, vencido USD 2.180 en dos facturas, crédito disponible bajo, SO 12135 retenido. Mostrar las pestañas Cuenta corriente (facturas abiertas en JDE), Interacciones (todo el historial) y Datos y entregas (direcciones con GLN). Los campos de JDE son de solo lectura.</aside>
+</section>
+<section class="slide" id="s-segmentacion" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 3 · Segmentar la cartera</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Quién compra qué, quién dejó de comprar</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Cada vendedor ve solo su cartera; el supervisor, la de su equipo.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Filtros por canal, categoría, línea comprada o no en 6 meses, frecuencia, deuda y quiebre de mix.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Inactivos a recuperar en el mes: la lista baja con cada compra o interacción. Mapa y exportación.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">2.1.3 Segmentación avanzada<br>2.1.5 Consulta de inactivos<br>2.1.9 Seguridad por vendedor<br>6.2 Geolocalización de cuentas</p>
+</div>
+</div>
+<img src="/help/clientes-segmento.jpg" alt="Lista de clientes filtrada: activos que no compraron Santa Julia en 6 meses" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Clientes · filtro “No compró Santa Julia” + “Activos”</p>
+<aside>Ejemplo de la matriz: clientes activos que compran la empresa pero no Santa Julia. Las etiquetas ZQ/SJ/ESP/AC muestran qué líneas compró en 6 meses; en rojo, la que dejó de comprar. Definición de activo: compra en los últimos 6 meses. La segmentación se calcula cada noche con las ventas facturadas de JDE.</aside>
+</section>
+<section class="slide" id="s-texto" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 4 · Cotizar desde el WhatsApp</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Del mensaje de la clienta al presupuesto</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Marta escribe: “3 cajas Malbec Santa Julia, 2 cajas Zuccardi Q Tempranillo y 4 cajas de aceite 500”.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">El CRM interpreta el texto y busca cada producto en el catálogo de JDE, con precio, stock y alternativas.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Nada se agrega sin confirmar y cada línea guarda el texto original. Los favoritos del cliente, a un clic.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">1.5 WhatsApp<br>4.1.1 Cotización con precios y promociones<br>4.1.2 Historial y productos favoritos<br>4.1.7 Stock disponible al cotizar</p>
+</div>
+</div>
+<img src="/help/presu-texto.jpg" alt="Armar presupuesto desde el texto del WhatsApp, con productos del catálogo de JDE" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: WhatsApp → La Cava → “Armar presupuesto desde este mensaje”</p>
+<aside>Es el caso de uso que más impacto tiene en el día a día. En la demo: abrir WhatsApp, conversación con Marta Díaz (La Cava), botón sobre el mensaje. Muestra condiciones detectadas (“la semana que viene” sugiere fecha requerida, no se aplica sola) y el % de similitud de cada producto.</aside>
+</section>
+<section class="slide" id="s-valorizar" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 5 · Valorizar con JDE</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">El precio final lo pone JD Edwards</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">JDE valoriza con su lista, bonificaciones y promociones vigentes por canal y categoría, sin grabar nada.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">N descuentos y almacén por renglón, cinco monedas y versiones guardadas del presupuesto.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Descuento sobre el máximo, precio cero o sin cargo: pasa por autorización comercial antes de enviarse.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">1.4 Promociones por canal y categoría<br>4.1.5 N descuentos por renglón<br>3.8 Hasta cinco monedas<br>4.1.6 Autorización comercial del pedido</p>
+</div>
+</div>
+<img src="/help/presu-editor.jpg" alt="Presupuesto PR-0415 valorizado por JDE y enviado como SO 12134" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Presupuestos → PR-0415 (versiones 1 y 2)</p>
+<aside>PR-0415: versión 1 sin promoción, versión 2 con Santa Julia 10 % y una línea sin cargo (muestra) que requirió autorización de M. López. Total valorizado por JDE USD 900,60. Las columnas lista, bonificación y promoción dependen de cómo estén hoy los precios avanzados de Zuccardi. PDF con plantilla Zuccardi y envío por WhatsApp.</aside>
+</section>
+<section class="slide" id="s-pedido" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 6 · Pedido en JDE</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Confirmar es la única acción del vendedor</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">El presupuesto se convierte en pedido en JDE (P4210) en segundos; un reenvío nunca lo duplica.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">JDE decide la retención con sus reglas (C1 crédito, C2 vencidos); el vendedor recibe el aviso una vez.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Estado, despacho y factura se siguen desde el CRM; liberación o ampliación de crédito, con un clic.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">1.2 Envío de la nota de pedido<br>4.1.3 Conversión automática a pedido<br>4.1.4 y 4.1.10 Almacén y domicilio<br>4.1.8 Pedidos retenidos por jerarquía</p>
+</div>
+</div>
+<img src="/help/pedido-retenido.jpg" alt="Pedido SO 12135 retenido por límite de crédito, con la vista P4210 de JDE" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Pedidos → SO 12135 · “Solicitar liberación”</p>
+<aside>SO 12135 de La Cava retenido C1. Mostrar el panel “Vista en JD Edwards” (P4210 Customer Service Inquiry) y la referencia ZQ-PR-0416 en Customer PO, que es la clave que impide duplicar. Los pedidos de Krikos y los cargados a mano en JDE se ven igual pero no se reexportan. Ojo 4.1.9 (cambios después de enviado al ERP): se muestra la modificación de líneas mientras está en 520; el circuito completo depende de cómo esté configurado P4210 en Zuccardi.</aside>
+</section>
+<section class="slide" id="s-aprobaciones" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 7 · Aprobar</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Circuitos de aprobación, con los datos de JDE a la vista</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Ampliación de crédito de La Cava a USD 35.000: vendedor, supervisor y Gerencia por monto.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Quien aprueba ve límite, disponible, vencido y pedidos de JDE en la misma solicitud.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Al aprobar, el CRM registra en JDE y devuelve el número de documento. Rechazo con motivo obligatorio.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">2.2.1 Notas de crédito comerciales<br>2.2.2 Baja e inhabilitación<br>2.2.3 Ampliación de límite de crédito<br>2.2.4 Notas de crédito por devolución</p>
+</div>
+</div>
+<img src="/help/aprob-lc.jpg" alt="Solicitud LC-0088 de ampliación de límite de crédito en Gerencia" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: cambiar a Roberto Fernández (Gerencia) → Aprobaciones → LC-0088</p>
+<aside>Cambiar de usuario desde el menú: Roberto Fernández (Gerencia comercial). Aprobar LC-0088: el límite de La Cava pasa a USD 35.000 en JDE (P03013) y el vendedor recibe el aviso. Otras para mostrar: NC-0231 (Gerencia, más de USD 1.000), ND-0045 (Logística con remito conforme), BJ-0012 (baja de La Glorieta, Administración). Los circuitos, responsables, plazos y condiciones por monto se configuran en Administración, sin programar.</aside>
+</section>
+<section class="slide" id="s-alta" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 8 · Alta de cliente</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Del relevamiento al AN8, sin duplicados</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">El vendedor releva datos fiscales, canal, atributos propios del canal y direcciones de entrega con GLN.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Se verifica en JDE por CUIT y nombres parecidos; si ya existe, se vincula sin crear nada.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Aprobada por Administración, se crea en JDE y el AN8 vuelve a la ficha; Administración recibe el correo.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">2.1.1 Alta con relevamiento por canal<br>2.2.5 Workflow de autorización del alta<br>1.1 Maestro de clientes y contactos</p>
+</div>
+</div>
+<img src="/help/alta-aprobar.jpg" alt="Solicitud de alta AC-0101 de Vinoteca Del Parque en Administración comercial" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: cambiar a Mariana Ruiz (Administración) → Aprobaciones → AC-0101</p>
+<aside>Como Mariana Ruiz, aprobar AC-0101 (Vinoteca Del Parque SRL): el cliente queda activo con su AN8 y sus dos direcciones de entrega. También se puede devolver al vendedor para corregir. La verificación de duplicados usa ClienteBuscar (CUIT con y sin guiones) y BuscarDireccion por nombre; la IA da su veredicto pero nunca vincula sola.</aside>
+</section>
+<section class="slide" id="s-oportunidades" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 9 · Oportunidades</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">El pipeline con el vocabulario de Zuccardi</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Tablero por etapa con probabilidad, fecha estimada de cierre y valorización anual en cinco monedas.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Ampliación de línea, nuevo distribuidor, nueva carta, eventos; con la facturación real leída de JDE.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Al perder: motivo y competidor. Al ganar: presupuesto o alta de cliente con un clic.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">3.1 a 3.4 Pipeline, probabilidad, cierre<br>3.5 Ampliar participación en el cliente<br>3.6 Nuevo distribuidor valorizado<br>3.7 Actividades y tareas imputadas</p>
+</div>
+</div>
+<img src="/help/opps-kanban.jpg" alt="Tablero de oportunidades por etapa de Juan Pérez" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Oportunidades · arrastrar una tarjeta entre etapas</p>
+<aside>Mostrar arrastrar una tarjeta a Perdida (pide motivo y competidor) o a Ganada (ofrece presupuesto). OP-0101 Distribuidora Andes en ARS 48 M, OP-0106 Siete Fuegos en EUR 6.500. Las oportunidades de ampliación de línea nacen también de las alertas de quiebre de mix. Prospectos con puntaje, origen y regla de asignación por zona en el menú Prospectos.</aside>
+</section>
+<section class="slide" id="s-objetivos" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 10 · Objetivos y KPI</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Litros y botellas facturadas, todos los días</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Avance contra el ritmo del mes por vendedor, supervisor y gerencia: botellas, litros, clientes nuevos, visitas.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Cuenta todo lo facturado: pedidos del CRM, de Krikos y cargados a mano en JDE, sin reexportarlos.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Nueve variables con su peso y nivel de logro para comisiones; objetivos importados y aprobados en tablero.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">5.1 a 5.12 Objetivos y reportes (13 puntos)<br>1.10 Pedidos manuales en JDE al objetivo<br>2.1.8 Objetivo anual por cliente</p>
+</div>
+</div>
+<img src="/help/objetivos.jpg" alt="Objetivos del mes con avance diario de botellas contra el objetivo lineal" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Objetivos y KPI · pestaña “Asignación y aprobación” como Marcela López</p>
+<aside>Las ventas facturadas se importan cada noche de JDE con su origen (CRM, Krikos o manual). Abajo de la pantalla están las 9 variables con pesos y el tramo de comisión. Como supervisora (Marcela López) se ve la asignación y aprobación de objetivos del mes siguiente, con la comparación contra el objetivo de Gerencia, y el precio promedio objetivo por categoría. Reportes: embudo, ventas por línea y canal, inactivos, adopción del sistema, impacto de promociones; datos disponibles para MicroStrategy.</aside>
+</section>
+<section class="slide" id="s-campo" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 11 · Agenda, visitas y relevamientos</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">La calle, visible y planificada</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Calendario de visitas y cartera geolocalizada; la ruta de la semana se arma por frecuencia y cercanía.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Visita con check-in, promociones ofrecidas con su respuesta y próxima acción como tarea.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Diez tipos de relevamiento: góndola, precios de competencia, GLN, POP, pilas, eventos, OCA, cartas.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">6.1 a 6.4 Agenda y visitas (4 puntos)<br>8.1 a 8.10 Encuestas y relevamientos<br>1.1 GLN y OCA de vuelta en JDE</p>
+</div>
+</div>
+<img src="/help/agenda-ruta.jpg" alt="Mapa de la cartera con la ruta sugerida de la semana" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Agenda y visitas → “Armar ruta de la semana próxima”</p>
+<aside>La ruta usa la frecuencia de visita de cada cliente y su última visita, ordenadas por vecino más cercano; “Agendar ruta” crea las visitas. En Relevamientos: confirmar un GLN actualiza la dirección de entrega en JDE (DireccionesEntrega) y una OCA crea la orden abierta (OrdenAbierta). El resto alimenta los reportes de cobertura, competencia e impacto de promociones.</aside>
+</section>
+<section class="slide" id="s-movil" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 12 · Trabajo sin señal</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">La app de calle sigue funcionando sin conexión</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Sin señal, el celular trabaja con la foto de los datos JDE de la mañana y muestra de qué hora es.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Visitas, pedidos y relevamientos quedan en cola para sincronizar.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Al volver la señal todo viaja; JDE valida precio, crédito y stock definitivos.</p></div>
+<div style="background:#eef6f6;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#23555a">Fase 1 en la matriz, ya demostrable</p>
+<p style="font-size:24px;line-height:1.45;color:#1d1b22">7.2 Pedidos y cotizaciones<br>7.3 Registro de visitas<br>7.4 Stock, cuenta corriente y crédito<br>1.8 Herramientas offline (MVP)</p>
+</div>
+</div>
+<img src="/help/movil-offline.jpg" alt="App móvil en modo sin señal con datos JDE de la mañana" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: App móvil → interruptor “Con señal / Sin señal”</p>
+<aside>Ningún CRM puede mostrar datos en vivo sin señal: lo que hace es mostrar la última foto y decir de cuándo es. En la maqueta el modo sin señal se simula en el navegador; en producción es una app iOS/Android con base local cifrada. La matriz lo pone como Fase 1; si lo quieren en el MVP no cambia la arquitectura, solo el orden de entrega. 7.1 (oportunidades desde el celular) es parcial: el pipeline se usa desde el navegador del celular.</aside>
+</section>
+<section class="slide" id="s-ia" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 13 · Asistente IA</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Preguntas en lenguaje natural, respuestas con evidencia</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">“¿Cuánto le vendimos a La Cava este año y qué le falta comprar?”, “Pedidos retenidos de mi zona”, “Stock de Malbec en Maipú”.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Responde solo con datos de JDE y del CRM, respeta los permisos y cita la evidencia.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Ofrece la acción siguiente y el informe en Excel, sin pedirlo a Sistemas.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">4.2.1 Productos sugeridos<br>4.2.4 Potencialidades de IA<br>5.4 Reportes del vendedor con seguridad</p>
+</div>
+</div>
+<img src="/help/asistente.jpg" alt="Asistente IA respondiendo las ventas 2026 de La Cava por línea" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Asistente IA · también WhatsApp con plantillas de JDE</p>
+<aside>En la maqueta el asistente funciona con reglas sobre los datos (no llama a un modelo de lenguaje); en producción usa IA con control anti-invención: cada cifra se verifica contra los datos, datos enmascarados, tope diario de consumo y módulo que se apaga sin afectar la integración. Mostrar también WhatsApp: conversaciones en la ficha, plantillas de presupuesto, pedido, despacho y factura, y avisos internos al vendedor.</aside>
+</section>
+<section class="slide" id="s-consola" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Paso 14 · Trazabilidad y administración</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Cada operación con JDE, a la vista de Sistemas</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Cada consulta, alta, presupuesto y pedido queda registrado con su recorrido y lo que respondió JDE.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Procesos programados, reproceso de errores y la prueba de qué pasa si JDE no responde.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Administración sin programar: circuitos, reglas de alertas, descuentos máximos y reasignación de cartera.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Puntos MVP que cubre</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">1.1 Integración con JD Edwards<br>1.7 Capa de datos para BI (simulada)<br>2.1.10 Reasignación masiva de cartera</p>
+</div>
+</div>
+<img src="/help/integracion-ops.jpg" alt="Consola de integración con la lista de operaciones contra JDE" style="width:960px;height:661px;object-fit:contain;border-radius:14px;border:1px solid #e3d9cc;box-shadow:0 12px 40px rgba(63,19,28,0.12);background:#ffffff">
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En la demo: Integración JDE → Conexiones → “Simular caída de JDE”</p>
+<aside>Pensado para Sistemas (Fernando). Cada invocación se ve en los dos lados: en la consola y en el Orchestrator Monitor de JDE con el usuario de servicio. Las orquestaciones se promueven por el procedimiento de Zuccardi (DV, PY, PD). Momento fuerte de la demo: activar “Simular caída de JDE” y volver a la ficha de La Cava: el panel muestra la última foto con su hora y el CRM sigue operando.</aside>
+</section>
+<section class="slide" id="mvp-tabla" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 128px;display:flex;flex-direction:column;gap:32px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">La cobertura</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">La Matriz Funcional, sección por sección</h2>
+</div>
+<table style="font-size:25px;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr style="background:#3f131c"><th style="width:27%;color:#f6f2ec;text-align:left">Sección</th><th style="width:9%;color:#f6f2ec;text-align:right">Puntos</th><th style="width:17%;color:#f6f2ec;text-align:left">Prioridad</th><th style="width:30%;color:#f6f2ec;text-align:left">En la maqueta</th><th style="width:17%;color:#f6f2ec;text-align:left">Dónde se ve</th></tr>
+<tr style="background:#ffffff"><td>1 · Interfaces</td><td style="text-align:right">10</td><td>9 MVP · 1 Fase 2</td><td>6 en pantalla · 4 simulados</td><td>Consola, Pedidos</td></tr>
+<tr style="background:#f3ede4"><td>2.1 · Clientes</td><td style="text-align:right">10</td><td>MVP</td><td>10 en pantalla</td><td>Clientes, Ficha</td></tr>
+<tr style="background:#ffffff"><td>2.2 · Workflows</td><td style="text-align:right">5</td><td>MVP</td><td>5 en pantalla</td><td>Aprobaciones</td></tr>
+<tr style="background:#f3ede4"><td>3 · Oportunidades</td><td style="text-align:right">8</td><td>MVP</td><td>8 en pantalla</td><td>Oportunidades</td></tr>
+<tr style="background:#ffffff"><td>4.1 · Pedidos y cotizaciones</td><td style="text-align:right">10</td><td>MVP</td><td>9 en pantalla · 1 parcial</td><td>Presupuestos</td></tr>
+<tr style="background:#f3ede4"><td>4.2 · IA del pedido</td><td style="text-align:right">4</td><td>3 MVP · 1 deseable</td><td>4 en pantalla</td><td>Mi día, Asistente</td></tr>
+<tr style="background:#ffffff"><td>5 · Objetivos y reportes</td><td style="text-align:right">13</td><td>MVP</td><td>13 en pantalla</td><td>Objetivos</td></tr>
+<tr style="background:#f3ede4"><td>6 · Agenda y visitas</td><td style="text-align:right">4</td><td>MVP</td><td>4 en pantalla</td><td>Agenda</td></tr>
+<tr style="background:#ffffff"><td>7 · App móvil offline</td><td style="text-align:right">4</td><td>Fase 1</td><td>3 en pantalla · 1 parcial</td><td>App móvil</td></tr>
+<tr style="background:#f3ede4"><td>8 · Relevamientos</td><td style="text-align:right">10</td><td>MVP</td><td>10 en pantalla</td><td>Relevamientos</td></tr>
+<tr style="background:#f3e6e8"><td><b>Total</b></td><td style="text-align:right"><b>78</b></td><td><b>72 MVP</b></td><td><b>68 MVP en pantalla · 3 simulados · 1 parcial</b></td><td><b>Cobertura</b></td></tr>
+</table>
+<aside>Simulados en Interfaces: 1.5 WhatsApp, 1.6 correo, 1.7 BI MicroStrategy (MVP) y 1.9 importación de Krikos (Fase 2; los pedidos de Krikos ya integrados por JDE sí cuentan para objetivos). Parciales: 4.1.9 cambios del pedido después de enviado a JDE y 7.1 oportunidades desde la app de campo. La pantalla “Cobertura de la matriz” de la plataforma tiene los 78 puntos con el enlace a cada pantalla, para recorrerla con ellos.</aside>
+</section>
+<section class="slide" id="ic-portada" data-transition="fade" style="background:#3f131c;color:#f6f2ec;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:center;gap:40px">
+<div style="position:absolute;left:1380px;top:-180px;width:760px;height:760px;border-radius:50%;background:#5a1b27"></div>
+<div style="position:absolute;left:1620px;top:640px;width:520px;height:520px;border-radius:50%;background:#722231"></div>
+<p style="font-size:28px;letter-spacing:4px;text-transform:uppercase;color:#d9a7af;font-weight:600">Lo que sigue</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:96px;font-weight:600;line-height:1.08;color:#f6f2ec;width:1300px">Módulo Inteligencia del CRM</h2>
+<p style="font-size:34px;line-height:1.45;color:#e8d9d3;width:1200px">Cinco casos de uso que convierten los datos de JD Edwards y del CRM en acciones concretas para el vendedor, el supervisor y la administración comercial.</p>
+<div style="display:flex;gap:16px;flex-wrap:wrap;width:1250px">
+<p style="font-size:26px;font-weight:600;color:#f6f2ec;border:1px solid rgba(246,242,236,.35);border-radius:99px;padding:10px 26px">Retener</p>
+<p style="font-size:26px;font-weight:600;color:#f6f2ec;border:1px solid rgba(246,242,236,.35);border-radius:99px;padding:10px 26px">Crecer</p>
+<p style="font-size:26px;font-weight:600;color:#f6f2ec;border:1px solid rgba(246,242,236,.35);border-radius:99px;padding:10px 26px">Ahorrar tiempo</p>
+<p style="font-size:26px;font-weight:600;color:#f6f2ec;border:1px solid rgba(246,242,236,.35);border-radius:99px;padding:10px 26px">Cuidar el margen</p>
+<p style="font-size:26px;font-weight:600;color:#f6f2ec;border:1px solid rgba(246,242,236,.35);border-radius:99px;padding:10px 26px">Confiar en los datos</p>
+</div>
+<aside>Cambio de bloque: hasta acá, lo que cubre el MVP. Ahora, la etapa siguiente. El CRM ya junta en un solo lugar las ventas facturadas de JDE, la cuenta corriente, los pedidos y todo el historial de interacciones; el módulo de inteligencia usa esa base para anticipar, sugerir y ahorrar trabajo. Son cinco casos, cada uno con un verbo de negocio: retener, crecer, ahorrar tiempo, cuidar el margen y confiar en los datos.</aside>
+</section>
+<section class="slide" id="ic-casos" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:112px 128px 128px;display:flex;flex-direction:column;gap:44px">
+<div style="display:flex;flex-direction:column;gap:12px">
+<p style="font-size:26px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Inteligencia del CRM</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:60px;font-weight:600;line-height:1.15;color:#1d1b22">Cinco casos de uso, cada uno con su salida en el CRM</h2>
+</div>
+<table style="font-size:27px;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif">
+<tr style="background:#3f131c"><th style="width:5%;color:#f6f2ec;text-align:left">#</th><th style="width:27%;color:#f6f2ec;text-align:left">Caso de uso</th><th style="width:25%;color:#f6f2ec;text-align:left">Qué aporta</th><th style="width:43%;color:#f6f2ec;text-align:left">Salida en el CRM</th></tr>
+<tr style="background:#ffffff"><td style="color:#8a2b3a;font-weight:600">1</td><td><b>Salud de cuenta y riesgo de fuga</b></td><td>Retiene clientes antes de que se vayan</td><td>Semáforo por cliente, con los 3 motivos principales del riesgo y alerta al responsable</td></tr>
+<tr style="background:#f3ede4"><td style="color:#8a2b3a;font-weight:600">2</td><td><b>Next Best Action</b> (cross-sell y up-sell)</td><td>Hace crecer la facturación por cliente</td><td>Tarjeta “qué ofrecerle ahora”, con producto, argumento y probabilidad de aceptación</td></tr>
+<tr style="background:#ffffff"><td style="color:#8a2b3a;font-weight:600">3</td><td><b>Asistente de interacciones</b> (NLP)</td><td>Ahorra tiempo y captura lo que hoy se pierde</td><td>Resumen automático de mails, llamadas y notas, con compromisos, próximos pasos y sentimiento</td></tr>
+<tr style="background:#f3ede4"><td style="color:#8a2b3a;font-weight:600">4</td><td><b>Precio y descuento recomendado</b></td><td>Protege el margen sin perder cierres</td><td>Rango de descuento sugerido por propuesta, según cliente y probabilidad de cierre</td></tr>
+<tr style="background:#f3e6e8"><td style="color:#8a2b3a;font-weight:600">5</td><td><b>Calidad de datos automática</b></td><td>Hace confiables los otros cuatro</td><td>Deduplicación, normalización y autocompletado, con score de confianza por registro</td></tr>
+</table>
+<p style="font-size:26px;color:#4a4550;line-height:1.4">Todo se muestra donde el vendedor ya trabaja: <b>Mi día, la ficha del cliente, el presupuesto y las alertas por correo y WhatsApp.</b></p>
+<aside>La tabla resume el módulo. Los cuatro primeros casos generan negocio o ahorran tiempo; el quinto es la base que los hace confiables (por eso va resaltado). No hay pantallas nuevas que aprender: cada caso aparece en una pantalla que ya vimos en el recorrido. En las slides siguientes, uno por uno, con la pantalla de ejemplo y los mismos clientes de la demo.</aside>
+</section>
+<section class="slide" id="ic-salud" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Caso 1 · Salud de cuenta y riesgo de fuga</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Ver la fuga antes de que el cliente se vaya</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Cada noche, un puntaje de salud de 0 a 100 por cliente: frecuencia, ticket, mix, deuda, reclamos e interacciones.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Semáforo verde, amarillo o rojo, con los 3 motivos que más pesan, en palabras del negocio y con su evidencia.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Si una cuenta pasa a rojo, avisa al vendedor y al supervisor con una acción sugerida. Lo que pasa después ajusta el modelo.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Con qué datos</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">Ventas facturadas y cuenta corriente de JDE<br>Pedidos retenidos y reclamos<br>Visitas, WhatsApp y correos del CRM</p>
+</div>
+</div>
+<div class="mk">
+<div class="top"><div class="search">⌕&nbsp; Buscar cliente, AN8, CUIT, SO, presupuesto, producto…</div><span class="jde">● JDE conectado</span><div class="av">JP</div><div class="who">Juan Pérez<span>Vendedor · Mendoza Centro</span></div></div>
+<div class="body">
+<div class="row" style="justify-content:space-between;align-items:flex-end">
+<div><p class="crumb">Clientes › Salud de la cartera</p><p class="h">Salud de la cartera</p><p class="sub">182 clientes · calculado hoy 03:10 con ventas de JDE e interacciones del CRM</p></div>
+<div class="row" style="gap:6px"><span class="pill green">● 142 verdes</span><span class="pill amber">● 31 amarillos</span><span class="pill red">● 9 rojos</span></div>
+</div>
+<div class="row" style="align-items:stretch;gap:12px;flex:1;min-height:0">
+<div class="card" style="width:400px;flex:none;padding:12px 0 0">
+<p class="ch" style="padding:0 14px 8px">Cuentas que más bajaron</p>
+<div class="row" style="padding:9px 14px;background:#fbf3f4;border-left:3px solid #a3263a"><span class="dot" style="background:#c0392b"></span><div style="flex:1"><p style="font-weight:600">Bar Notable</p><p class="small muted">Frecuencia −61 % en 90 días</p></div><p style="font-weight:600;color:#a3263a">28</p></div>
+<div class="row" style="padding:9px 14px;border-top:1px solid #f1ebe3"><span class="dot" style="background:#c0392b"></span><div style="flex:1"><p style="font-weight:600">Restaurante El Patio</p><p class="small muted">Sin compras hace 74 días</p></div><p style="font-weight:600;color:#a3263a">34</p></div>
+<div class="row" style="padding:9px 14px;border-top:1px solid #f1ebe3"><span class="dot" style="background:#c0392b"></span><div style="flex:1"><p style="font-weight:600">Almacén Gourmet Chacras</p><p class="small muted">Dejó de comprar Zuccardi Q</p></div><p style="font-weight:600;color:#a3263a">39</p></div>
+<div class="row" style="padding:9px 14px;border-top:1px solid #f1ebe3"><span class="dot" style="background:#e0a100"></span><div style="flex:1"><p style="font-weight:600">Hotel Park Mendoza</p><p class="small muted">Ticket promedio −22 %</p></div><p style="font-weight:600;color:#8a6100">52</p></div>
+<div class="row" style="padding:9px 14px;border-top:1px solid #f1ebe3"><span class="dot" style="background:#e0a100"></span><div style="flex:1"><p style="font-weight:600">Vinoteca La Cava SRL</p><p class="small muted">Crédito al límite, pedido retenido</p></div><p style="font-weight:600;color:#8a6100">58</p></div>
+<div class="row" style="padding:9px 14px;border-top:1px solid #f1ebe3"><span class="dot" style="background:#e0a100"></span><div style="flex:1"><p style="font-weight:600">Vinoteca Del Parque SRL</p><p class="small muted">Visitas sin pedido: 3 seguidas</p></div><p style="font-weight:600;color:#8a6100">61</p></div>
+</div>
+<div class="card col" style="flex:1;gap:9px">
+<div class="row" style="justify-content:space-between"><div><p class="h" style="font-size:20px">Bar Notable</p><p class="sub">AN8 60718 · Bar · Mendoza Centro</p></div><div style="text-align:right"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:34px;font-weight:600;color:#a3263a;line-height:1">28<span style="font-size:15px;color:#6b6470"> /100</span></p><span class="pill red">Riesgo alto</span></div></div>
+<svg viewBox="0 0 470 70" width="470" height="70" style="display:block"><line x1="0" y1="62" x2="470" y2="62" stroke="#ece5db"/><path d="M0,14 L40,15 L80,13 L120,17 L160,16 L200,22 L240,27 L280,31 L320,38 L360,44 L400,49 L440,55 L470,57" fill="none" stroke="#a3263a" stroke-width="2.5"/><circle cx="470" cy="57" r="4" fill="#a3263a"/><text x="0" y="9" font-size="10.5" fill="#6b6470" font-family="IBM Plex Sans">71 · julio</text><text x="470" y="9" font-size="10.5" fill="#6b6470" text-anchor="end" font-family="IBM Plex Sans">puntaje 90 días</text></svg>
+<p class="ch">3 motivos principales</p>
+<div class="row" style="align-items:flex-start"><span class="pill wine">41 %</span><p class="small"><b>Compra menos seguido:</b> de 3,1 a 1,2 pedidos por mes en los últimos 90 días.</p></div>
+<div class="row" style="align-items:flex-start"><span class="pill wine">33 %</span><p class="small"><b>Deuda:</b> USD 3.552 vencidos a más de 45 días y SO 12128 retenido (C2).</p></div>
+<div class="row" style="align-items:flex-start"><span class="pill wine">18 %</span><p class="small"><b>Reclamo abierto:</b> rotura en entrega, sin cerrar hace 12 días (RC-0087).</p></div>
+<p class="small muted">Evidencia: F42119 ventas · F03B11 vencidos · F4201 hold C2 · reclamo RC-0087</p>
+<div class="row" style="background:#fbf3f4;border:1px solid #f1c7cd;border-radius:8px;padding:7px 10px;gap:8px"><p class="small" style="color:#722231">🔔 Alerta enviada a <b>Juan Pérez</b> y <b>M. López</b> · hoy 08:00 · por correo y WhatsApp</p></div>
+<div class="row" style="margin-top:auto"><span class="btn pri">Agendar visita de retención</span><span class="btn">Ver ficha</span><span class="btn">No aplica</span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En el CRM: Clientes → Salud de la cartera · también en Mi día y en la ficha</p>
+<aside>El puntaje se calcula de noche, igual que la segmentación, con las ventas facturadas de JDE y lo que el CRM sabe de la relación (visitas, reclamos, conversaciones). Lo importante no es el número sino los tres motivos: el vendedor ve por qué la cuenta está en riesgo y qué hacer. Ejemplo: Bar Notable bajó de 71 a 28 en tres meses; compra menos seguido, tiene deuda vencida con el SO 12128 retenido y un reclamo sin cerrar. La alerta llega al vendedor y al supervisor. Si el vendedor marca “No aplica” (por ejemplo, cierre por temporada), esa respuesta mejora el modelo. Métrica de éxito: cuentas en rojo que vuelven a verde o amarillo en 60 días.</aside>
+</section>
+<section class="slide" id="ic-nba" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Caso 2 · Next Best Action</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Qué ofrecerle ahora a cada cliente, y por qué</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Compara al cliente con otros de su canal, categoría y zona: qué compran ellos que este todavía no.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Cruza con el stock, las promociones vigentes de JDE y la estacionalidad: no sugiere lo que no se puede entregar.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Un clic y pasa al presupuesto. Si el vendedor la descarta, el motivo ajusta las próximas sugerencias.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Con qué datos</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">Ventas facturadas por línea y SKU (JDE)<br>Stock, precios y promociones (JDE)<br>Sugerencias aceptadas y descartadas (CRM)</p>
+</div>
+</div>
+<div class="mk">
+<div class="top"><div class="search">⌕&nbsp; Buscar cliente, AN8, CUIT, SO, presupuesto, producto…</div><span class="jde">● JDE conectado</span><div class="av">JP</div><div class="who">Juan Pérez<span>Vendedor · Mendoza Centro</span></div></div>
+<div class="body">
+<div><p class="crumb">Clientes › Vinoteca La Cava SRL</p>
+<div class="row" style="gap:8px"><p class="h">Vinoteca La Cava SRL</p><span class="pill green">Activo</span><span class="pill wine">Vinoteca</span><span class="pill gray">Premium</span></div>
+<p class="sub">AN8 61044 · Mendoza Centro · Juan Pérez (sup. M. López) · compra ZQ y aceites, no Santa Julia desde 10/02</p></div>
+<div class="tabs"><span>Resumen</span><span class="on">Qué ofrecerle ahora <span class="pill ia" style="padding:0 7px;margin-left:3px">3</span></span><span>Cuenta corriente</span><span>Pedidos y presupuestos</span><span>Interacciones</span></div>
+<div class="row" style="justify-content:space-between"><p class="small muted">Comparado con 46 vinotecas Premium de Mendoza · stock y promociones de JDE al 15/10 09:12</p><span class="pill ia">✦ Sugerido por IA</span></div>
+<div class="row" style="align-items:stretch;gap:10px;flex:1;min-height:0">
+<div class="card col" style="flex:1;gap:8px;border-top:4px solid #8a2b3a">
+<div class="row" style="justify-content:space-between"><span class="pill wine">Cross-sell</span><span class="small muted">Línea SJ</span></div>
+<p style="font-weight:600;font-size:15.5px;line-height:1.25">Santa Julia Malbec 750 ml</p>
+<p class="small muted">Caja × 6 · promo “Santa Julia 10 %” hasta 31/10</p>
+<p class="small">El <b>78 %</b> de las vinotecas Premium de la zona compra Santa Julia. La Cava la dejó en febrero, cuando cambió de proveedor de vinos jóvenes.</p>
+<div><div class="row" style="justify-content:space-between"><p class="small muted">Prob. de aceptación</p><p style="font-weight:600;color:#23555a">64 %</p></div><div class="bar"><i style="width:64%"></i></div></div>
+<p class="small muted">Stock: 1.240 cajas · Maipú</p>
+<div class="row" style="margin-top:auto;gap:6px"><span class="btn pri">+ Al presupuesto</span><span class="btn">Descartar</span></div>
+</div>
+<div class="card col" style="flex:1;gap:8px;border-top:4px solid #e0a100">
+<div class="row" style="justify-content:space-between"><span class="pill amber">Estacional</span><span class="small muted">Línea ESP</span></div>
+<p style="font-weight:600;font-size:15.5px;line-height:1.25">Espumante Extra Brut 750 ml</p>
+<p class="small muted">Caja × 6 · para fin de año</p>
+<p class="small">En 2025 compró <b>6 cajas</b> en la primera quincena de diciembre. Para entregar a tiempo, el pedido debería entrar antes del <b>20/11</b>.</p>
+<div><div class="row" style="justify-content:space-between"><p class="small muted">Prob. de aceptación</p><p style="font-weight:600;color:#23555a">72 %</p></div><div class="bar"><i style="width:72%"></i></div></div>
+<p class="small muted">Stock: 610 cajas · Maipú</p>
+<div class="row" style="margin-top:auto;gap:6px"><span class="btn pri">+ Al presupuesto</span><span class="btn">Descartar</span></div>
+</div>
+<div class="card col" style="flex:1;gap:8px;border-top:4px solid #2d6a70">
+<div class="row" style="justify-content:space-between"><span class="pill teal">Up-sell</span><span class="small muted">Línea ZQ</span></div>
+<p style="font-weight:600;font-size:15.5px;line-height:1.25">Polígonos Paraje Altamira Malbec</p>
+<p class="small muted">Caja × 6 · un escalón sobre Zuccardi Q</p>
+<p class="small">Compra Zuccardi Q Malbec todos los meses. <b>6 de cada 10</b> clientes con ese perfil sumaron Polígonos; su ticket subió 18 %.</p>
+<div><div class="row" style="justify-content:space-between"><p class="small muted">Prob. de aceptación</p><p style="font-weight:600;color:#23555a">41 %</p></div><div class="bar"><i style="width:41%"></i></div></div>
+<p class="small muted">Stock: 180 cajas · Maipú</p>
+<div class="row" style="margin-top:auto;gap:6px"><span class="btn pri">+ Al presupuesto</span><span class="btn">Descartar</span></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En el CRM: Ficha → “Qué ofrecerle ahora” · también al armar el presupuesto</p>
+<aside>Es la evolución de lo que hoy ya muestra la alerta de quiebre de mix (4.2.2 y 4.2.3 de la matriz): en lugar de una regla fija, compara a cada cliente con sus pares y aprende de lo que se acepta y lo que no. Cada tarjeta trae el argumento listo para usar con el cliente y la probabilidad de aceptación. Respeta el stock y las promociones de JDE en el momento, así que no sugiere lo que no se puede entregar. Métrica de éxito: porcentaje de tarjetas aceptadas y facturación incremental frente a un grupo de control.</aside>
+</section>
+<section class="slide" id="ic-interacciones" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Caso 3 · Asistente de interacciones</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Cada conversación, resumida y con sus compromisos</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Lee correos, transcribe llamadas y audios de WhatsApp y toma las notas de visita: arma un resumen corto en la ficha.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Detecta compromisos y próximos pasos con responsable y fecha, y los pasa a la agenda con un clic.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Marca sentimiento y temas: precio, entrega, reclamo, competencia. Esas señales alimentan la salud de la cuenta.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Con qué datos</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">Correo (Microsoft 365) y WhatsApp Business<br>Llamadas y notas de visita del CRM<br>Pedidos y facturas de JDE para dar contexto</p>
+</div>
+</div>
+<div class="mk">
+<div class="top"><div class="search">⌕&nbsp; Buscar cliente, AN8, CUIT, SO, presupuesto, producto…</div><span class="jde">● JDE conectado</span><div class="av">JP</div><div class="who">Juan Pérez<span>Vendedor · Mendoza Centro</span></div></div>
+<div class="body">
+<div><p class="crumb">Clientes › Vinoteca La Cava SRL › Interacciones</p><div class="row" style="gap:8px"><p class="h">Vinoteca La Cava SRL</p><span class="pill green">Activo</span><span class="pill wine">Vinoteca</span></div></div>
+<div class="row" style="align-items:stretch;gap:12px;flex:1;min-height:0">
+<div class="card" style="width:262px;flex:none;padding:10px 0 0">
+<p class="ch" style="padding:0 12px 6px">Interacciones · 28</p>
+<div style="padding:8px 12px;background:#fbf3f4;border-left:3px solid #8a2b3a"><p style="font-weight:600;font-size:13px">☏ Llamada · Marta Díaz</p><p class="small muted">14/10 16:20 · 7 min</p><span class="pill ia" style="margin-top:3px">✦ Resumen listo</span></div>
+<div style="padding:8px 12px;border-top:1px solid #f1ebe3"><p style="font-weight:600;font-size:13px">✉ Correo · “Pedido SO 12135”</p><p class="small muted">13/10 11:05 · 3 mensajes</p><span class="pill ia" style="margin-top:3px">✦ Resumen listo</span></div>
+<div style="padding:8px 12px;border-top:1px solid #f1ebe3"><p style="font-weight:600;font-size:13px">◍ WhatsApp · Marta Díaz</p><p class="small muted">13/10 09:40 · “3 cajas Malbec SJ…”</p><span class="pill ia" style="margin-top:3px">✦ Resumen listo</span></div>
+<div style="padding:8px 12px;border-top:1px solid #f1ebe3"><p style="font-weight:600;font-size:13px">⌖ Visita · Juan Pérez</p><p class="small muted">01/10 10:30 · nota de voz 2 min</p><span class="pill ia" style="margin-top:3px">✦ Resumen listo</span></div>
+<div style="padding:8px 12px;border-top:1px solid #f1ebe3"><p style="font-weight:600;font-size:13px">✉ Correo · “Lista de precios oct.”</p><p class="small muted">29/09 15:12</p></div>
+</div>
+<div class="card col" style="flex:1;gap:9px">
+<div class="row" style="justify-content:space-between"><div><p style="font-weight:600;font-size:15.5px">Llamada con Marta Díaz</p><p class="sub">14/10 16:20 · 7 min · transcripta automáticamente</p></div><span class="pill teal">Sentimiento: neutral → positivo</span></div>
+<p class="ch">✦ Resumen</p>
+<p style="font-size:13.5px;line-height:1.5">Marta consulta por el <b>SO 12135</b>, retenido por crédito: necesita la mercadería antes del <b>24/10</b> para una degustación. Acepta pagar esta semana las dos facturas vencidas para liberar el pedido. Pide precios de espumantes para fin de año y comenta que <b>otra bodega le ofreció 15 % de descuento</b>.</p>
+<p class="ch">Compromisos y próximos pasos</p>
+<div class="row" style="align-items:flex-start"><span class="chk"></span><p class="small" style="flex:1"><b>Cliente</b> · Pagar facturas vencidas (USD 2.180,00)</p><span class="pill gray">antes del 18/10</span></div>
+<div class="row" style="align-items:flex-start"><span class="chk"></span><p class="small" style="flex:1"><b>Juan Pérez</b> · Pedir liberación del SO 12135 al confirmar el pago</p><span class="pill gray">18/10</span></div>
+<div class="row" style="align-items:flex-start"><span class="chk"></span><p class="small" style="flex:1"><b>Juan Pérez</b> · Enviar presupuesto de espumantes para fin de año</p><span class="pill gray">17/10</span></div>
+<p class="ch">Temas detectados</p>
+<div class="row" style="gap:6px;flex-wrap:wrap"><span class="pill wine">Crédito</span><span class="pill gray">Entrega con fecha</span><span class="pill amber">Fin de año</span><span class="pill red">Competencia · descuento 15 %</span></div>
+<div class="row" style="margin-top:auto;justify-content:space-between"><div class="row" style="gap:6px"><span class="btn pri">Crear 2 tareas en la agenda</span><span class="btn">Editar resumen</span></div><p class="small muted">Audio y transcripción originales guardados</p></div>
+</div>
+</div>
+</div>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En el CRM: Ficha → Interacciones · también al cerrar una visita en la app móvil</p>
+<aside>Responde al dolor del “conocimiento que se va con el vendedor”: hoy mucho de lo que se habla con el cliente no queda escrito en ningún lado. Ejemplo con La Cava: de una llamada de siete minutos salen el resumen, tres compromisos con fecha (uno del cliente, dos del vendedor) y una señal de competencia que después usa el caso 4 al sugerir el descuento. Nada se agenda solo: el vendedor confirma. El audio y la transcripción originales quedan guardados como respaldo. Métrica de éxito: minutos ahorrados por vendedor por semana y porcentaje de interacciones con resumen y próximos pasos.</aside>
+</section>
+<section class="slide" id="ic-precio" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Caso 4 · Precio y descuento recomendado</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">El descuento justo para cerrar sin regalar margen</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Aprende de las propuestas ganadas y perdidas: qué descuento cerró, con qué cliente, producto, volumen y competidor.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">En cada propuesta sugiere un rango y muestra cuánto cambian la probabilidad de cierre y el margen.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">El máximo lo sigue fijando Zuccardi y el precio final, JDE. Fuera de la política, pasa por la autorización comercial.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Con qué datos</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">Presupuestos ganados y perdidos, con motivo (CRM)<br>Precios, costos y promociones (JDE)<br>Señales de competencia de las interacciones</p>
+</div>
+</div>
+<div class="mk">
+<div class="top"><div class="search">⌕&nbsp; Buscar cliente, AN8, CUIT, SO, presupuesto, producto…</div><span class="jde">● JDE conectado</span><div class="av">JP</div><div class="who">Juan Pérez<span>Vendedor · Mendoza Centro</span></div></div>
+<div class="body">
+<div class="row" style="justify-content:space-between;align-items:flex-end">
+<div><p class="crumb">Presupuestos › PR-0418</p><div class="row" style="gap:8px"><p class="h">PR-0418 · Vinoteca La Cava SRL</p><span class="pill gray">Borrador · v1</span></div><p class="sub">Espumantes para fin de año · 60 cajas · lista USD 4.320,00 · descuento máximo de la política 15 %</p></div>
+</div>
+<div class="card col" style="gap:8px;flex:1">
+<div class="row" style="justify-content:space-between"><p class="ch">✦ Descuento recomendado</p><span class="pill ia">Basado en 214 propuestas similares · 12 meses</span></div>
+<div class="row" style="gap:14px;align-items:center"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:30px;font-weight:600;color:#23555a;line-height:1">6 % – 9 %</p><p class="small muted" style="flex:1">Vinotecas Premium · espumantes · 10 a 80 cajas · competidor mencionado con 15 % (llamada del 14/10)</p></div>
+<svg viewBox="0 0 580 205" width="100%" height="205" style="display:block;font-family:'IBM Plex Sans', Arial, sans-serif">
+<rect x="240" y="16" width="100" height="164" fill="#e3f1f1"/>
+<text x="290" y="12" font-size="11" fill="#23555a" text-anchor="middle" font-weight="600">rango sugerido</text>
+<line x1="40" y1="180" x2="540" y2="180" stroke="#d9cfc2"/>
+<line x1="40" y1="126.7" x2="540" y2="126.7" stroke="#f1ebe3"/><line x1="40" y1="73.3" x2="540" y2="73.3" stroke="#f1ebe3"/><line x1="40" y1="20" x2="540" y2="20" stroke="#f1ebe3"/>
+<text x="32" y="184" font-size="10.5" fill="#6b6470" text-anchor="end">20 %</text><text x="32" y="130" font-size="10.5" fill="#6b6470" text-anchor="end">40 %</text><text x="32" y="77" font-size="10.5" fill="#6b6470" text-anchor="end">60 %</text><text x="32" y="24" font-size="10.5" fill="#6b6470" text-anchor="end">80 %</text>
+<text x="40" y="197" font-size="10.5" fill="#6b6470" text-anchor="middle">0 %</text><text x="173.3" y="197" font-size="10.5" fill="#6b6470" text-anchor="middle">4 %</text><text x="306.7" y="197" font-size="10.5" fill="#6b6470" text-anchor="middle">8 %</text><text x="440" y="197" font-size="10.5" fill="#6b6470" text-anchor="middle">12 %</text><text x="540" y="197" font-size="10.5" fill="#6b6470" text-anchor="middle">15 % desc.</text>
+<path d="M40.0,129.3 L56.7,117.4 L73.3,106.9 L90.0,97.6 L106.7,89.5 L123.3,82.2 L140.0,75.9 L156.7,70.2 L173.3,65.3 L190.0,60.9 L206.7,57.0 L223.3,53.6 L240.0,50.6 L256.7,48.0 L273.3,45.6 L290.0,43.5 L306.7,41.7 L323.3,40.1 L340.0,38.7 L356.7,37.4 L373.3,36.3 L390.0,35.3 L406.7,34.5 L423.3,33.7 L440.0,33.0 L456.7,32.5 L473.3,31.9 L490.0,31.5 L506.7,31.1 L523.3,30.7 L540.0,30.4" fill="none" stroke="#2d6a70" stroke-width="2.5"/>
+<path d="M40.0,130.4 L56.7,131.3 L73.3,132.1 L90.0,132.9 L106.7,133.8 L123.3,134.6 L140.0,135.5 L156.7,136.4 L173.3,137.3 L190.0,138.1 L206.7,139.1 L223.3,140.0 L240.0,140.9 L256.7,141.8 L273.3,142.8 L290.0,143.7 L306.7,144.7 L323.3,145.6 L340.0,146.6 L356.7,147.6 L373.3,148.6 L390.0,149.6 L406.7,150.7 L423.3,151.7 L440.0,152.8 L456.7,153.8 L473.3,154.9 L490.0,156.0 L506.7,157.1 L523.3,158.2 L540.0,159.3" fill="none" stroke="#8a2b3a" stroke-width="2.5"/>
+<text x="120" y="70" font-size="11.5" fill="#23555a" font-weight="600">Probabilidad de cierre</text>
+<text x="60" y="152" font-size="11.5" fill="#8a2b3a" font-weight="600">Margen bruto</text>
+<line x1="306.7" y1="41.7" x2="306.7" y2="144.7" stroke="#23555a" stroke-dasharray="3 3"/>
+<circle cx="306.7" cy="41.7" r="5" fill="#2d6a70"/><circle cx="306.7" cy="144.7" r="5" fill="#8a2b3a"/>
+<line x1="506.7" y1="31.1" x2="506.7" y2="157.1" stroke="#a3263a" stroke-dasharray="3 3"/>
+<circle cx="506.7" cy="31.1" r="5" fill="#fff" stroke="#2d6a70" stroke-width="2"/><circle cx="506.7" cy="157.1" r="5" fill="#fff" stroke="#8a2b3a" stroke-width="2"/>
+<text x="506.7" y="173" font-size="11" fill="#a3263a" text-anchor="middle" font-weight="600">cargado: 14 %</text>
+</svg>
+<div class="row" style="align-items:stretch;gap:10px">
+<div style="flex:1;border:1px solid #c6e0e1;background:#f2f8f8;border-radius:8px;padding:8px 12px"><p class="small" style="font-weight:600;color:#23555a">Con 8 % (sugerido)</p><p style="font-size:13.5px">Cierre <b>72 %</b> · margen <b>33,2 %</b> · USD 1.321</p></div>
+<div style="flex:1;border:1px solid #f1c7cd;background:#fbf3f4;border-radius:8px;padding:8px 12px"><p class="small" style="font-weight:600;color:#a3263a">Con 14 % (cargado)</p><p style="font-size:13.5px">Cierre <b>76 %</b> · margen <b>28,6 %</b> · USD 1.062</p></div>
+</div>
+<div class="row" style="justify-content:space-between;margin-top:auto"><p class="small" style="color:#4a4550">Por 4 puntos más de probabilidad se resignan <b>USD 259</b> de margen.</p><div class="row" style="gap:6px"><span class="btn pri">Aplicar 8 %</span><span class="btn">Mantener 14 %</span></div></div>
+</div>
+</div>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En el CRM: Presupuestos → panel “Descuento recomendado”</p>
+<aside>El caso que más cuida la rentabilidad. El modelo no fija precios: el precio final lo sigue poniendo JDE con su lista y promociones, y el descuento máximo lo define Zuccardi. Lo que agrega es información para decidir: en el ejemplo, el vendedor cargó 14 % porque la clienta mencionó un 15 % de la competencia (dato que salió del resumen de la llamada, caso 3). Con 8 % la probabilidad de cierre es casi la misma y se cuidan USD 259 de margen. Si mantiene 14 %, puede hacerlo; si supera el máximo, pasa por la autorización comercial existente. Necesita historial de propuestas ganadas y perdidas con motivo, que el CRM ya registra. Métrica de éxito: descuento promedio y margen con la misma tasa de cierre.</aside>
+</section>
+<section class="slide" id="ic-calidad" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:36px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Caso 5 · Calidad de datos automática</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Datos confiables, para que todo lo demás funcione</h2>
+</div>
+<div style="display:flex;gap:48px;align-items:start">
+<div style="width:656px;display:flex;flex-direction:column;gap:22px">
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">1</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Detecta duplicados por CUIT, razón social, dirección y teléfono, y propone fusionarlos en el registro de JDE.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">2</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Normaliza teléfonos y direcciones; autocompleta desde el CUIT (padrón de ARCA) y geolocaliza.</p></div>
+<div style="display:flex;gap:18px;align-items:start"><p style="flex:none;width:44px;height:44px;border-radius:50%;background:#8a2b3a;color:#f6f2ec;font-size:24px;font-weight:600;text-align:center;line-height:1.83">3</p><p style="flex:1;font-size:25px;line-height:1.4;color:#1d1b22">Cada registro lleva su score de confianza. Lo que toca a JDE va por el circuito de cambios, nunca directo.</p></div>
+<div style="background:#f3e6e8;border-radius:14px;padding:22px 26px;display:flex;flex-direction:column;gap:6px">
+<p style="font-size:24px;font-weight:600;color:#722231">Con qué datos</p>
+<p style="font-size:24px;line-height:1.45;color:#3f131c">Maestro de clientes y direcciones (JDE)<br>Prospectos y contactos cargados en el CRM<br>Padrón de ARCA y geocodificación</p>
+</div>
+</div>
+<div class="mk">
+<div class="top"><div class="search">⌕&nbsp; Buscar cliente, AN8, CUIT, SO, presupuesto, producto…</div><span class="jde">● JDE conectado</span><div class="av">ML</div><div class="who">M. López<span>Supervisor · Mendoza</span></div></div>
+<div class="body">
+<div><p class="crumb">Administración › Calidad de datos</p><p class="h">Calidad de datos</p><p class="sub">Mendoza · 412 clientes y 96 prospectos · revisado hoy 03:30</p></div>
+<div class="row" style="gap:10px;align-items:stretch">
+<div class="card" style="flex:1;padding:9px 12px"><p class="small muted">Confianza promedio</p><p style="font-family:'Source Serif 4', Georgia, serif;font-size:24px;font-weight:600;color:#23555a">87 %</p></div>
+<div class="card" style="flex:1;padding:9px 12px"><p class="small muted">Posibles duplicados</p><p style="font-family:'Source Serif 4', Georgia, serif;font-size:24px;font-weight:600;color:#a3263a">12</p></div>
+<div class="card" style="flex:1;padding:9px 12px"><p class="small muted">Datos a normalizar</p><p style="font-family:'Source Serif 4', Georgia, serif;font-size:24px;font-weight:600;color:#8a6100">48</p></div>
+<div class="card" style="flex:1;padding:9px 12px"><p class="small muted">Autocompletados (semana)</p><p style="font-family:'Source Serif 4', Georgia, serif;font-size:24px;font-weight:600;color:#1d1b22">63</p></div>
+</div>
+<div class="card col" style="gap:7px">
+<div class="row" style="justify-content:space-between"><p class="ch">Posible duplicado</p><span class="pill red">Coincidencia 97 %</span></div>
+<div class="row" style="align-items:stretch;gap:10px">
+<div style="flex:1;border:1px solid #c6e0e1;border-radius:8px;padding:7px 10px"><p style="font-weight:600;font-size:13px">Vinoteca La Cava SRL <span class="pill teal">JDE · AN8 61044</span></p><p class="small muted">30-71234567-9 · Av. Arístides Villanueva 512 · 261 512-3456</p></div>
+<div style="flex:1;border:1px solid #e9e1d6;border-radius:8px;padding:7px 10px"><p style="font-weight:600;font-size:13px">La Cava Vinoteca <span class="pill gray">Prospecto CRM</span></p><p class="small muted">30-71234567-9 · Aristides Villanueva 512, Mza · 2615123456</p></div>
+</div>
+<div class="row" style="justify-content:space-between"><div class="row" style="gap:6px"><span class="pill green">CUIT igual</span><span class="pill green">Teléfono igual</span><span class="pill amber">Dirección 96 %</span><span class="pill amber">Razón social 92 %</span></div><div class="row" style="gap:6px"><span class="btn pri">Fusionar en AN8 61044</span><span class="btn">No es duplicado</span></div></div>
+</div>
+<div class="card" style="padding:9px 0 2px;flex:1">
+<p class="ch" style="padding:0 14px 4px">Normalización y autocompletado</p>
+<div class="row" style="padding:6px 14px;border-top:1px solid #f1ebe3"><p class="small" style="width:170px;font-weight:600">Hotel Park Mendoza</p><p class="small" style="flex:1"><span class="muted">Teléfono</span> 0261 15 512-3456 → <b>+54 9 261 512-3456</b></p><span class="pill green">99 %</span><span class="btn">Aplicar</span></div>
+<div class="row" style="padding:6px 14px;border-top:1px solid #f1ebe3"><p class="small" style="width:170px;font-weight:600">Restaurante Siete Fuegos</p><p class="small" style="flex:1"><span class="muted">Cond. IVA</span> vacía → <b>Resp. Inscripto</b> (ARCA)</p><span class="pill green">98 %</span><span class="btn">Aplicar</span></div>
+<div class="row" style="padding:6px 14px;border-top:1px solid #f1ebe3"><p class="small" style="width:170px;font-weight:600">Almacén Gourmet Chacras</p><p class="small" style="flex:1"><span class="muted">Ubicación</span> sin geolocalizar → <b>punto en el mapa</b></p><span class="pill amber">91 %</span><span class="btn">Aplicar</span></div>
+<div class="row" style="padding:6px 14px;border-top:1px solid #f1ebe3"><p class="small" style="width:170px;font-weight:600">Bar Notable</p><p class="small" style="flex:1"><span class="muted">Canal</span> “bar/resto” → <b>Bar</b> (catálogo de canales)</p><span class="pill red">74 %</span><span class="btn">Revisar</span></div>
+</div>
+</div>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">En el CRM: Administración → Calidad de datos · y al dar de alta un cliente</p>
+<aside>Es el caso menos vistoso y el más importante: si un cliente está duplicado o mal clasificado, el semáforo, las sugerencias y el descuento recomendado se calculan mal. Ejemplo: un prospecto cargado desde WhatsApp que en realidad es La Cava, ya cliente en JDE; mismo CUIT y teléfono, por eso 97 %. La fusión respeta a JDE como sistema rector: el registro que manda es el AN8, y cualquier cambio sobre datos de JDE sale por el circuito de cambios de cliente, igual que las altas. Lo de alta confianza se puede aplicar en lote; lo de baja confianza siempre lo revisa una persona. Métrica de éxito: porcentaje de registros con confianza mayor a 90 % y duplicados abiertos.</aside>
+</section>
+<section class="slide" id="ic-base" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 128px;display:flex;flex-direction:column;gap:40px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Inteligencia del CRM · Cómo funciona</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Una base confiable y cuatro casos que la usan</h2>
+</div>
+<div style="display:flex;gap:24px;align-items:stretch">
+<div style="width:360px;flex:none;display:flex;flex-direction:column;gap:16px">
+<p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#6b6470;font-weight:600">Fuentes</p>
+<div style="flex:1;background:#ffffff;border:1px solid #e3d9cc;border-top:8px solid #1d1b22;border-radius:16px;padding:22px 26px;display:flex;flex-direction:column;gap:8px"><h3 style="font-size:28px;font-weight:600;color:#1d1b22">JD Edwards</h3><p style="font-size:22px;line-height:1.4;color:#4a4550">Ventas facturadas, cuenta corriente, pedidos, precios, promociones y stock</p></div>
+<div style="flex:1;background:#ffffff;border:1px solid #e3d9cc;border-top:8px solid #8a2b3a;border-radius:16px;padding:22px 26px;display:flex;flex-direction:column;gap:8px"><h3 style="font-size:28px;font-weight:600;color:#8a2b3a">CRM</h3><p style="font-size:22px;line-height:1.4;color:#4a4550">Visitas, WhatsApp, correos, reclamos y propuestas ganadas y perdidas</p></div>
+</div>
+<p style="flex:none;align-self:center;font-size:56px;color:#c98b95;line-height:1;margin-top:40px">→</p>
+<div style="flex:1;display:flex;flex-direction:column;gap:16px">
+<p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#6b6470;font-weight:600">Módulo de inteligencia</p>
+<div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-radius:14px;padding:18px 22px;display:flex;gap:14px;align-items:center"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:40px;font-weight:600;color:#8a2b3a;line-height:1">1</p><p style="font-size:24px;line-height:1.25;font-weight:600">Salud de cuenta</p></div>
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-radius:14px;padding:18px 22px;display:flex;gap:14px;align-items:center"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:40px;font-weight:600;color:#8a2b3a;line-height:1">2</p><p style="font-size:24px;line-height:1.25;font-weight:600">Next Best Action</p></div>
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-radius:14px;padding:18px 22px;display:flex;gap:14px;align-items:center"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:40px;font-weight:600;color:#8a2b3a;line-height:1">3</p><p style="font-size:24px;line-height:1.25;font-weight:600">Asistente de interacciones</p></div>
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-radius:14px;padding:18px 22px;display:flex;gap:14px;align-items:center"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:40px;font-weight:600;color:#8a2b3a;line-height:1">4</p><p style="font-size:24px;line-height:1.25;font-weight:600">Precio y descuento</p></div>
+</div>
+<div style="background:#eef6f6;border:1px solid #d3e8e9;border-radius:14px;padding:18px 22px;display:flex;gap:14px;align-items:center"><p style="font-family:'Source Serif 4', Georgia, serif;font-size:40px;font-weight:600;color:#23555a;line-height:1">5</p><p style="font-size:24px;line-height:1.25;font-weight:600;color:#23555a">Calidad de datos automática <span style="font-weight:400;color:#4a4550">· la base de los otros cuatro</span></p></div>
+</div>
+<p style="flex:none;align-self:center;font-size:56px;color:#c98b95;line-height:1;margin-top:40px">→</p>
+<div style="width:300px;flex:none;display:flex;flex-direction:column;gap:16px">
+<p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#6b6470;font-weight:600">Dónde se ve</p>
+<div style="flex:1;background:#3f131c;border-radius:16px;padding:22px 26px;display:flex;flex-direction:column;gap:12px;justify-content:center">
+<p style="font-size:24px;color:#f6f2ec;font-weight:600">Mi día</p><p style="font-size:24px;color:#f6f2ec;font-weight:600">Ficha del cliente</p><p style="font-size:24px;color:#f6f2ec;font-weight:600">Presupuesto</p><p style="font-size:24px;color:#f6f2ec;font-weight:600">Alertas por correo y WhatsApp</p>
+</div>
+</div>
+</div>
+<div style="display:flex;gap:28px">
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#2d6a70;font-weight:600">La IA sugiere</p><p style="font-size:24px;line-height:1.4;color:#1d1b22">La persona decide. Nada se envía, agenda ni modifica sin confirmación.</p></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#2d6a70;font-weight:600">Siempre con el porqué</p><p style="font-size:24px;line-height:1.4;color:#1d1b22">Cada sugerencia muestra sus motivos y la evidencia en JDE o en el CRM.</p></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#2d6a70;font-weight:600">Datos protegidos</p><p style="font-size:24px;line-height:1.4;color:#1d1b22">Respeta los permisos por cartera; datos enmascarados al usar modelos de lenguaje.</p></div>
+<div style="flex:1;display:flex;flex-direction:column;gap:8px"><p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#2d6a70;font-weight:600">Se apaga sin impacto</p><p style="font-size:24px;line-height:1.4;color:#1d1b22">Módulo independiente: si se desactiva, el CRM y la integración siguen igual.</p></div>
+</div>
+<aside>La arquitectura en una imagen. Las fuentes son las mismas que ya usa el CRM; el módulo no agrega sistemas nuevos para el vendedor. El caso 5 va abajo porque es la base: sin datos limpios los otros cuatro se equivocan. Los cuatro principios son los mismos que ya aplicamos en el asistente IA del MVP: la IA sugiere y la persona decide, toda cifra tiene su evidencia, se respetan los permisos de cartera (cada vendedor ve solo lo suyo) y el módulo se puede apagar sin afectar la integración con JDE.</aside>
+</section>
+<section class="slide" id="ic-etapas" data-transition="fade" style="background:#fbf8f3;color:#1d1b22;font-family:'IBM Plex Sans', Arial, sans-serif;padding:96px 128px 160px;display:flex;flex-direction:column;gap:40px">
+<div style="display:flex;flex-direction:column;gap:8px">
+<p style="font-size:24px;letter-spacing:3px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Inteligencia del CRM · Cómo se implementa</p>
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:54px;font-weight:600;line-height:1.15;color:#1d1b22">Tres etapas, cada una con su forma de medir</h2>
+</div>
+<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:28px">
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-top:8px solid #2d6a70;border-radius:16px;padding:32px 34px;display:flex;flex-direction:column;gap:16px">
+<p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#2d6a70;font-weight:600">Etapa 1 · Ordenar la base</p>
+<h3 style="font-size:32px;font-weight:600;line-height:1.2;color:#1d1b22">5 Calidad de datos<br>3 Asistente de interacciones</h3>
+<p style="font-size:24px;line-height:1.45;color:#4a4550">No necesitan historia: dan valor desde el primer día y dejan limpios los datos que usan los demás.</p>
+<div style="margin-top:auto;background:#eef6f6;border-radius:12px;padding:16px 20px;display:flex;flex-direction:column;gap:4px"><p style="font-size:20px;font-weight:600;color:#23555a">Se mide con</p><p style="font-size:22px;line-height:1.4;color:#1d1b22">Registros con confianza mayor a 90 % · minutos ahorrados por vendedor</p></div>
+</div>
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-top:8px solid #8a2b3a;border-radius:16px;padding:32px 34px;display:flex;flex-direction:column;gap:16px">
+<p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#8a2b3a;font-weight:600">Etapa 2 · Retener y crecer</p>
+<h3 style="font-size:32px;font-weight:600;line-height:1.2;color:#1d1b22">1 Salud de cuenta<br>2 Next Best Action</h3>
+<p style="font-size:24px;line-height:1.45;color:#4a4550">Se entrenan con 24 meses de ventas facturadas de JDE y se validan contra lo que realmente pasó.</p>
+<div style="margin-top:auto;background:#f3e6e8;border-radius:12px;padding:16px 20px;display:flex;flex-direction:column;gap:4px"><p style="font-size:20px;font-weight:600;color:#722231">Se mide con</p><p style="font-size:22px;line-height:1.4;color:#1d1b22">Cuentas en rojo recuperadas a 60 días · facturación incremental vs. grupo de control</p></div>
+</div>
+<div style="background:#ffffff;border:1px solid #e3d9cc;border-top:8px solid #1d1b22;border-radius:16px;padding:32px 34px;display:flex;flex-direction:column;gap:16px">
+<p style="font-size:22px;letter-spacing:2px;text-transform:uppercase;color:#1d1b22;font-weight:600">Etapa 3 · Cuidar el margen</p>
+<h3 style="font-size:32px;font-weight:600;line-height:1.2;color:#1d1b22">4 Precio y descuento recomendado</h3>
+<p style="font-size:24px;line-height:1.45;color:#4a4550">Necesita el historial de propuestas ganadas y perdidas con su motivo, que el CRM registra desde el primer día.</p>
+<div style="margin-top:auto;background:#f3ede4;border-radius:12px;padding:16px 20px;display:flex;flex-direction:column;gap:4px"><p style="font-size:20px;font-weight:600;color:#4a4550">Se mide con</p><p style="font-size:22px;line-height:1.4;color:#1d1b22">Descuento promedio y margen, con la misma tasa de cierre</p></div>
+</div>
+</div>
+<p style="position:absolute;left:128px;bottom:64px;font-size:24px;color:#6b6470">Cada etapa arranca con un piloto en una zona y se extiende cuando el resultado se ve en los números.</p>
+<aside>El orden no es arbitrario: lo que no necesita historia va primero y prepara el terreno; lo que aprende de ventas pasadas va después, con datos ya limpios; y el precio recomendado va último porque necesita propuestas ganadas y perdidas con motivo, que el CRM empieza a acumular desde que entra en uso. Proponemos pilotear cada etapa en una zona (por ejemplo, Mendoza Centro con Juan Pérez y M. López) y medir contra un grupo de control antes de extenderla. Los plazos se definen en la sesión de definiciones.</aside>
+</section>
+<section class="slide" id="cierre" data-transition="fade" style="background:#3f131c;color:#f6f2ec;font-family:'IBM Plex Sans', Arial, sans-serif;padding:128px;display:flex;flex-direction:column;justify-content:space-between">
+<div style="position:absolute;left:1180px;top:-220px;width:980px;height:980px;border-radius:50%;background:#5a1b27"></div>
+<img src="/brand/zuccardi-light.png" alt="Zuccardi Valle de Uco" style="width:300px;height:132px;object-fit:contain">
+<div style="display:flex;flex-direction:column;gap:28px;width:1200px">
+<h2 style="font-family:'Source Serif 4', Georgia, serif;font-size:96px;font-weight:600;line-height:1.08;color:#f6f2ec">Gracias</h2>
+<p style="font-size:36px;line-height:1.4;color:#e8d9d3">Un CRM a medida que usa el vocabulario y los procesos de Zuccardi, con JD Edwards como única fuente de verdad.</p>
+</div>
+<div style="display:flex;align-items:center;gap:24px">
+<div style="background:#f6f2ec;border-radius:12px;padding:12px 18px;display:flex"><img src="/brand/eisplus.png" alt="EISPLUS" style="width:150px;height:56px;object-fit:contain"></div>
+<p style="font-size:26px;color:#e8d9d3">crm-zuccardi.eisplus.com.ar</p>
+</div>
+<aside>Abrir preguntas. Ofrecer dejar la maqueta abierta para que la usen y agendar la sesión de definiciones.</aside>
+</section>
+</div></div>
+<div id="bar"></div>
+<div id="notes"><b>Notas del orador</b><div id="notes-text"></div></div>
+<div id="hud">
+  <button id="prev" title="Anterior (←)">‹</button>
+  <span id="count"></span>
+  <button id="next" title="Siguiente (→)">›</button>
+  <button id="btn-notes" title="Notas del orador (N)">Notas</button>
+  <button id="btn-full" title="Pantalla completa (F)">Pantalla completa</button>
+  <button id="btn-help" title="Atajos (?)">?</button>
+</div>
+<div id="help"><div>
+  <kbd>→</kbd> <kbd>Espacio</kbd> <kbd>Clic</kbd> siguiente · <kbd>←</kbd> anterior<br>
+  <kbd>Inicio</kbd> / <kbd>Fin</kbd> primera / última · <kbd>F</kbd> pantalla completa<br>
+  <kbd>N</kbd> notas del orador · <kbd>Esc</kbd> cerrar
+</div></div>
+<script>
+(() => {
+  const slides = [...document.querySelectorAll('.slide')];
+  const canvas = document.getElementById('canvas');
+  const count = document.getElementById('count');
+  const bar = document.getElementById('bar');
+  const notesText = document.getElementById('notes-text');
+  let i = Math.max(0, Math.min(slides.length - 1, (parseInt(location.hash.slice(1), 10) || 1) - 1));
+  function fit() {
+    const s = Math.min(innerWidth / 1920, innerHeight / 1080);
+    canvas.style.transform = 'scale(' + s + ')';
+  }
+  function show(n) {
+    i = Math.max(0, Math.min(slides.length - 1, n));
+    slides.forEach((el, k) => el.classList.toggle('active', k === i));
+    count.textContent = (i + 1) + ' / ' + slides.length;
+    bar.style.width = ((i + 1) / slides.length * 100) + '%';
+    const aside = slides[i].querySelector('aside');
+    notesText.textContent = aside ? aside.textContent : 'Sin notas para esta slide.';
+    history.replaceState(null, '', '#' + (i + 1));
+  }
+  const full = () => (document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen()).catch(() => {});
+  addEventListener('resize', fit);
+  addEventListener('keydown', (e) => {
+    if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); show(i + 1); }
+    else if (['ArrowLeft', 'PageUp', 'Backspace'].includes(e.key)) { e.preventDefault(); show(i - 1); }
+    else if (e.key === 'Home') show(0);
+    else if (e.key === 'End') show(slides.length - 1);
+    else if (e.key === 'f' || e.key === 'F') full();
+    else if (e.key === 'n' || e.key === 'N') document.body.classList.toggle('notes');
+    else if (e.key === '?') document.body.classList.toggle('help');
+    else if (e.key === 'Escape') document.body.classList.remove('help', 'notes');
+  });
+  document.getElementById('stage').addEventListener('click', (e) => { if (e.target.closest('a')) return; show(e.clientX < innerWidth / 4 ? i - 1 : i + 1); });
+  document.getElementById('prev').onclick = () => show(i - 1);
+  document.getElementById('next').onclick = () => show(i + 1);
+  document.getElementById('btn-notes').onclick = () => document.body.classList.toggle('notes');
+  document.getElementById('btn-full').onclick = full;
+  document.getElementById('btn-help').onclick = () => document.body.classList.toggle('help');
+  document.getElementById('help').onclick = () => document.body.classList.remove('help');
+  let t; addEventListener('mousemove', () => { document.body.classList.add('ui'); clearTimeout(t); t = setTimeout(() => document.body.classList.remove('ui'), 1800); });
+  let x0 = null;
+  addEventListener('touchstart', (e) => { x0 = e.touches[0].clientX; }, { passive: true });
+  addEventListener('touchend', (e) => { if (x0 === null) return; const dx = e.changedTouches[0].clientX - x0; if (Math.abs(dx) > 40) show(dx < 0 ? i + 1 : i - 1); x0 = null; });
+  fit(); show(i);
+})();
+</script>
+</body>
+</html>

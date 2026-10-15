@@ -19,6 +19,12 @@
     - dedupCompute / similarity     control de duplicados en el alta de clientes
     - valuate ................ valorización de presupuestos (listas, bonificaciones, promociones)
     - seed ................... generador de los datos de demostración (clientes, ventas de 22 meses, actividad)
+  Módulo Inteligencia del CRM (pantalla #/inteligencia, rutas /api/ia/*):
+    - healthOf ............... 1 salud de cuenta y riesgo de fuga (puntaje 0–100, semáforo y 3 motivos)
+    - nbaFor ................. 2 Next Best Action: qué ofrecerle ahora (cross-sell, up-sell, estacional)
+    - iaAnalyze .............. 3 asistente de interacciones: resumen, compromisos, sentimiento y temas
+    - iaPricingFor ........... 4 precio y descuento recomendado (curva de cierre vs. margen)
+    - iaQuality .............. 5 calidad de datos: duplicados, normalización y autocompletado con confianza
   Tipos del modelo de datos: buscar "interface Customer", "interface Invoice", "interface Opportunity", etc.
 -->
 
@@ -1095,7 +1101,8 @@ function defaultSettings() {
 			"Control de duplicados con IA": true,
 			"Presupuesto desde texto": true,
 			"Asistente conversacional": true,
-			"Avisos por WhatsApp": true
+			"Avisos por WhatsApp": true,
+			"Inteligencia del CRM": true
 		},
 		kpiWeights: structuredClone(KPI_WEIGHTS)
 	};
@@ -13193,9 +13200,1488 @@ whatsapp.get("/api/whatsapp/internal", (req, res) => {
 	res.json(db.whatsapp.filter((m) => m.userId === req.user.id).sort((a, b) => b.at.localeCompare(a.at)).slice(0, 100));
 });
 //#endregion
+//#region server/routes/intelligence.ts
+/**
+* Módulo "Inteligencia del CRM": cinco casos de uso sobre los datos de JDE y del CRM.
+*   1 healthOf ............ salud de cuenta y riesgo de fuga (puntaje 0–100, semáforo y 3 motivos)
+*   2 nbaFor .............. Next Best Action: qué ofrecerle ahora (cross-sell, up-sell, estacional)
+*   3 iaAnalyze ........... asistente de interacciones: resumen, compromisos, sentimiento y temas
+*   4 iaPricingFor ........ precio y descuento recomendado (curva de cierre vs. margen)
+*   5 iaQuality ........... calidad de datos: duplicados, normalización y autocompletado con confianza
+* En la maqueta son reglas y estadística sobre los datos ficticios; en producción se reemplazan por
+* modelos entrenados con el historial real (y un modelo de lenguaje para el caso 3), con la misma API.
+*/
+init_types$1();
+var intelligence = Router$2();
+var IA_MODULE = "Inteligencia del CRM";
+var IA_LINE_COST = {
+	Zuccardi: .52,
+	"Santa Julia": .58,
+	Espumantes: .55,
+	Aceites: .62
+};
+var IA_CHANNEL_PLURAL = {
+	Vinoteca: "vinotecas",
+	Restaurante: "restaurantes",
+	Distribuidor: "distribuidores",
+	Supermercado: "supermercados",
+	Hotel: "hoteles",
+	Bar: "bares",
+	"Almacén gourmet": "almacenes gourmet"
+};
+var iaKey = "";
+var iaS = null;
+/** Estado del módulo (feedback, alertas, transcripciones de demo, historial de propuestas). Se regenera con los datos. */
+function iaState() {
+	if (iaS && iaKey === db.seededAt) return iaS;
+	iaKey = db.seededAt;
+	iaS = {
+		feedback: [],
+		alerted: {},
+		applied: [],
+		dismissed: {},
+		merged: {},
+		tasks: {},
+		decisions: []
+	};
+	iaInjectLegacyData();
+	iaS.transcripts = iaSeedTranscripts();
+	iaS.proposals = iaSeedProposals();
+	return iaS;
+}
+var iaClamp = (n, a, b) => Math.max(a, Math.min(b, n));
+var iaN1 = (n) => n.toLocaleString("es-AR", { maximumFractionDigits: 1 });
+var iaSellerNames = (sellerName) => new Set([...db.users.map((u) => u.name), ...sellerName ? [sellerName, sellerName.split(" ")[0]] : []]);
+intelligence.use("/api/ia", (_req, res, next) => {
+	if (db.settings.modules[IA_MODULE] === false) {
+		res.status(409).json({ error: "El módulo Inteligencia del CRM está desactivado (Administración → Módulos). El resto del CRM y la integración con JDE siguen funcionando." });
+		return;
+	}
+	iaState();
+	next();
+});
+// ───────────────────────── Caso 3 · Asistente de interacciones (NLP por reglas en la maqueta) ─────────────────────────
+var IA_TOPICS = [
+	{
+		label: "Crédito",
+		tone: "wine",
+		re: /cr[eé]dito|retenid|l[ií]mite|liberaci|vencid|deuda|transfer|plan de pago/i
+	},
+	{
+		label: "Entrega",
+		tone: "neutral",
+		re: /entreg|lleg[aó]|llegan|despach|log[ií]stica|demor|recibimos|horario/i
+	},
+	{
+		label: "Precio",
+		tone: "amber",
+		re: /precio|caro|descuento|bonificaci|presupuesto|cotiz/i
+	},
+	{
+		label: "Competencia",
+		tone: "red",
+		re: /otra bodega|competencia|bodega [xy]\b|me ofreci[oó]|nos ofreci[oó]|le ofreci[oó]|me ofrecieron|nos ofrecieron/i
+	},
+	{
+		label: "Reclamo",
+		tone: "red",
+		re: /reclamo|rot[oa]s\b|faltante|mal estado|roturas?|queja/i
+	},
+	{
+		label: "Promoción",
+		tone: "teal",
+		re: /promo|promoci[oó]n/i
+	},
+	{
+		label: "Fin de año",
+		tone: "amber",
+		re: /fin de a[nñ]o|fiestas|navidad|diciembre|brindis|12\/12/i
+	},
+	{
+		label: "Degustación / evento",
+		tone: "violet",
+		re: /degustaci|\bcata\b|evento/i
+	},
+	{
+		label: "Pedido",
+		tone: "teal",
+		re: /necesit|\bcajas?\b|pedido|reponer/i
+	}
+];
+var IA_POS = /gracias|genial|perfecto|conforme|excelente|buen[ií]simo|b[aá]rbaro|\bdale\b|joya|me encant|muy bien|de acuerdo|quedamos atentos/gi;
+var IA_NEG = /problema|rot[oa]s\b|reclamo|molest|\bcaro\b|car[ií]simo|tarde\b|demor|no lleg|preocup|urgente|enojad|\bmal\b|no puedo|lamentablemente|otra vez|nadie me|cambiar la carta|no se resuelve/gi;
+var IA_SELLER_COMMIT = /\b(te (mando|env[ií]o|paso|confirmo|preparo|llevo|aviso|reservo|armo)|le (mando|env[ií]o|paso|confirmo)|(voy|vamos) a (mandar|enviar|pedir|gestionar|llevar|pasar|confirmar|agendar|armar|preparar|revisar|hablar)|lo (gestiono|pido|reviso|confirmo)|me ocupo|pido la liberaci[oó]n)/i;
+var IA_CLIENT_COMMIT = /\b(te transfiero|transferimos|les transfiero|pago|pagamos|(voy|vamos) a (pagar|transferir|cancelar|confirmar)|cancelamos)\b/i;
+var IA_REQUEST = /\b(necesito|necesitamos|pasame|p[aá]same|mandame|m[aá]ndame|me pas[aá]s|me mand[aá]s|cotizame|me podr[ií]as|nos podr[ií]as|podr[ií]as pasar)\b/i;
+function iaSentences(text) {
+	const out = [];
+	let speaker;
+	for (const raw of String(text ?? "").split(/\n+/)) {
+		const line = raw.trim();
+		if (!line) continue;
+		const from = /^De\s*:\s*([^<\n]+)/i.exec(line);
+		if (from) {
+			speaker = from[1].trim();
+			continue;
+		}
+		if (/^(Para|Asunto|Fecha|CC)\s*:/i.test(line)) continue;
+		const m = /^([A-ZÁÉÍÓÚÑ][\wáéíóúñ.]*(?: [A-ZÁÉÍÓÚÑ][\wáéíóúñ.]*)?)\s*:\s*(.+)$/.exec(line);
+		let body = line;
+		if (m && /^(hola|buen[oa]s|estimad[oa]|querid[oa])\b/i.test(m[1])) body = m[2];
+		else if (m && m[1].length <= 24) {
+			speaker = m[1];
+			body = m[2];
+		}
+		for (const s of body.split(/(?<=[.!?])\s+/)) if (s.trim().length > 2) out.push({
+			speaker,
+			text: s.trim()
+		});
+	}
+	return out;
+}
+function iaDue(s, base) {
+	const b = new Date(base);
+	const d = new Date(b);
+	d.setHours(10, 0, 0, 0);
+	const m = /antes del? (\d{1,2})\/(\d{1,2})/i.exec(s) ?? /\bel (\d{1,2})\/(\d{1,2})/i.exec(s);
+	if (m) {
+		const x = new Date(b.getFullYear(), Number(m[2]) - 1, Number(m[1]), 10);
+		if (x.getTime() < b.getTime() - 30 * DAY) x.setFullYear(x.getFullYear() + 1);
+		if (/antes/i.test(m[0])) x.setDate(x.getDate() - 1);
+		return x;
+	}
+	if (/\bhoy\b|hoy mismo/i.test(s)) return d;
+	if (/ma[nñ]ana/i.test(s)) return new Date(d.getTime() + DAY);
+	const days = [
+		"domingo",
+		"lunes",
+		"martes",
+		"mi[eé]rcoles",
+		"jueves",
+		"viernes",
+		"s[aá]bado"
+	];
+	for (let i = 0; i < 7; i++) if (new RegExp(`\\b${days[i]}\\b`, "i").test(s)) {
+		let add = (i - d.getDay() + 7) % 7;
+		if (add === 0) add = 7;
+		return new Date(d.getTime() + add * DAY);
+	}
+	if (/esta semana/i.test(s)) return new Date(d.getTime() + Math.max(1, 5 - d.getDay()) * DAY);
+	if (/semana que viene|pr[oó]xima semana/i.test(s)) return new Date(d.getTime() + ((8 - d.getDay()) % 7 || 7) * DAY);
+	if (/fin de mes/i.test(s)) return new Date(d.getFullYear(), d.getMonth() + 1, 0, 10);
+	return new Date(d.getTime() + 2 * DAY);
+}
+function iaClean(s) {
+	const t = s.replace(/^(dale|perfecto|s[ií]|bueno|ok|genial|uh|hola[^,.]*)[,.]\s*/i, "").replace(/\s+/g, " ").trim();
+	const c = t.charAt(0).toUpperCase() + t.slice(1);
+	return c.length > 140 ? `${c.slice(0, 137)}…` : c;
+}
+/** Analiza un texto (llamada transcripta, correo, WhatsApp o nota). `ctx`: { at, sellerName, clientName }. */
+function iaAnalyze(text, ctx = {}) {
+	const at = ctx.at ?? (/* @__PURE__ */ new Date()).toISOString();
+	const sellers = iaSellerNames(ctx.sellerName);
+	const sents = iaSentences(text);
+	const roleOf = (sp) => sp && sellers.has(sp) ? "vendedor" : "cliente";
+	const topicsHit = /* @__PURE__ */ new Map();
+	const scored = sents.map((s, i) => {
+		let score = 0;
+		const hits = IA_TOPICS.filter((t) => t.re.test(s.text));
+		for (const t of hits) {
+			topicsHit.set(t.label, t);
+			score += 2;
+		}
+		if (/\d/.test(s.text)) score += 2;
+		if (IA_SELLER_COMMIT.test(s.text) || IA_CLIENT_COMMIT.test(s.text) || IA_REQUEST.test(s.text)) score += 3;
+		if (s.text.length > 40 && s.text.length < 220) score += 1;
+		const pos = (s.text.match(IA_POS) ?? []).length;
+		const neg = (s.text.match(IA_NEG) ?? []).length;
+		return {
+			...s,
+			i,
+			score,
+			pos,
+			neg
+		};
+	});
+	const summary = [...scored].sort((a, b) => b.score - a.score).slice(0, 3).sort((a, b) => a.i - b.i).filter((s) => s.score > 0).map((s) => ({
+		speaker: s.speaker ?? ctx.clientName ?? "",
+		text: iaClean(s.text)
+	}));
+	const commitments = [];
+	const seen = /* @__PURE__ */ new Set();
+	for (const s of scored) {
+		const role = roleOf(s.speaker);
+		let who, what;
+		if (role === "vendedor" && IA_SELLER_COMMIT.test(s.text)) {
+			who = s.speaker && s.speaker.includes(" ") ? s.speaker : ctx.sellerName ?? s.speaker;
+			what = iaClean(s.text);
+		} else if (role === "cliente" && IA_CLIENT_COMMIT.test(s.text)) {
+			who = `Cliente${s.speaker ? ` (${s.speaker})` : ""}`;
+			what = iaClean(s.text);
+		} else if (role === "cliente" && IA_REQUEST.test(s.text)) {
+			who = ctx.sellerName ?? "Vendedor";
+			what = `Responder: «${iaClean(s.text)}»`;
+		}
+		if (!who || seen.has(what)) continue;
+		seen.add(what);
+		const due = iaDue(s.text, at);
+		commitments.push({
+			who,
+			role: who.startsWith("Cliente") ? "cliente" : "vendedor",
+			what,
+			due: due.toISOString(),
+			request: what.startsWith("Responder:"),
+			topics: IA_TOPICS.filter((t) => t.label !== "Pedido" && t.re.test(s.text)).map((t) => t.label)
+		});
+	}
+	// Un pedido del cliente que el vendedor ya respondió con un compromiso del mismo tema no se repite como tarea.
+	const promised = commitments.filter((x) => !x.request && x.role === "vendedor");
+	const kept = commitments.filter((x) => !x.request || !promised.some((p) => p.topics.some((t) => x.topics.includes(t)) || /pedido|mercader/i.test(x.what) && /pedido/i.test(p.what))).slice(0, 5).map(({ request, topics, ...x }) => x);
+	commitments.length = 0;
+	commitments.push(...kept);
+	const pos = scored.reduce((x, s) => x + s.pos, 0);
+	const neg = scored.reduce((x, s) => x + s.neg, 0);
+	const label = (p, n) => {
+		const v = (p - n) / (p + n + 1);
+		return v > .2 ? "positivo" : v < -.2 ? "negativo" : "neutral";
+	};
+	const half = Math.ceil(scored.length / 2);
+	const first = scored.slice(0, half), last = scored.slice(half);
+	const startL = label(first.reduce((x, s) => x + s.pos, 0), first.reduce((x, s) => x + s.neg, 0));
+	const endL = last.length ? label(last.reduce((x, s) => x + s.pos, 0), last.reduce((x, s) => x + s.neg, 0)) : startL;
+	const overall = label(pos, neg);
+	const signals = [];
+	const comp = scored.find((s) => IA_TOPICS[3].re.test(s.text));
+	if (comp) {
+		const pct = /(\d{1,2})\s?%/.exec(comp.text);
+		signals.push({
+			case: "precio",
+			pct: pct ? Number(pct[1]) : void 0,
+			text: pct ? `La competencia ofreció ${pct[1]} %: el descuento recomendado lo toma en cuenta.` : "Se mencionó a la competencia: el descuento recomendado lo toma en cuenta."
+		});
+	}
+	if (topicsHit.has("Reclamo") || overall === "negativo") signals.push({
+		case: "salud",
+		text: "Reclamo o malestar en la conversación: suma al riesgo de la cuenta."
+	});
+	const order = scored.find((s) => roleOf(s.speaker) === "cliente" && /\d+\s+cajas?/i.test(s.text));
+	if (order) signals.push({
+		case: "presupuesto",
+		text: "Hay un pedido en el texto: se puede armar el presupuesto desde el mensaje.",
+		texto: order.text
+	});
+	const tl = [...topicsHit.values()].map((t) => ({
+		label: t.label,
+		tone: t.tone
+	}));
+	return {
+		headline: `${tl.length ? tl.slice(0, 2).map((t) => t.label).join(", ") : "Sin temas comerciales"} · ${commitments.length} compromiso${commitments.length === 1 ? "" : "s"}`,
+		summary,
+		commitments,
+		sentiment: {
+			label: overall,
+			start: startL,
+			end: endL,
+			pos,
+			neg
+		},
+		topics: tl,
+		signals,
+		sentences: sents.length,
+		engine: "Reglas sobre el texto (maqueta) · en producción, modelo de lenguaje con verificación de cada dato"
+	};
+}
+function iaSeedTranscripts() {
+	const T = today();
+	const out = [];
+	const at = (d, h, m) => {
+		const x = new Date(T.getTime() - d * DAY);
+		x.setHours(h, m, 0, 0);
+		return x.toISOString();
+	};
+	const dm = (d) => fmtDate(new Date(T.getTime() + d * DAY));
+	const JP = db.users.find((u) => u.id === "u-jperez")?.name ?? "Juan Pérez";
+	const lc = customerById("c-lacava");
+	if (lc) {
+		const f = financials(lc);
+		const held = ordersOf(lc.id).find((o) => o.hold && o.status !== "999");
+		const n = lc.contacts[0]?.name ?? "Marta Díaz";
+		const fn = n.split(" ")[0];
+		out.push({
+			id: "tr-lacava-1",
+			customerId: lc.id,
+			kind: "Llamada",
+			title: `Llamada con ${n}`,
+			at: at(1, 16, 20),
+			who: n,
+			durationMin: 7,
+			source: "Transcripción automática de la llamada",
+			text: [
+				`${fn}: Hola ${JP.split(" ")[0]}, te llamo por el pedido que está retenido, el SO ${held?.so ?? 12135}.`,
+				`${JP}: Hola ${fn}. Sí, quedó retenido por crédito: tienen facturas vencidas por ${fmtUSD(f.overdue || 2180)}.`,
+				`${fn}: Uh, lamentablemente se nos pasó. Necesito la mercadería antes del ${dm(9)} porque tenemos una degustación en el local.`,
+				`${fn}: Esta semana te transfiero las facturas vencidas.`,
+				`${JP}: Perfecto. Apenas me confirmes el pago, pido la liberación del pedido.`,
+				`${fn}: Dale. Otra cosa: pasame precios de espumantes para fin de año.`,
+				`${fn}: Te cuento que otra bodega me ofreció un 15 % de descuento en espumantes.`,
+				`${JP}: Te mando el presupuesto de espumantes el viernes, con la promoción vigente.`,
+				`${fn}: Genial, gracias.`
+			].join("\n")
+		}, {
+			id: "tr-lacava-2",
+			customerId: lc.id,
+			kind: "Correo",
+			title: "Correo · Horario de recepción y lista de precios",
+			at: at(4, 11, 5),
+			who: n,
+			source: "Correo (Microsoft 365)",
+			text: [
+				`De: ${n} <${lc.contacts[0]?.email ?? lc.email}>`,
+				"Asunto: Horario de recepción y lista de precios",
+				`Hola ${JP.split(" ")[0]}: les confirmo que a partir de noviembre recibimos mercadería de lunes a viernes de 9 a 13.`,
+				"¿Me podrías mandar la lista de precios de noviembre con las promociones de Santa Julia?",
+				"Muchas gracias, quedamos atentos."
+			].join("\n")
+		});
+	}
+	const bn = customerById("c-barnotable");
+	if (bn) {
+		const n = bn.contacts[0]?.name ?? "Lucas Romero";
+		const fn = n.split(" ")[0];
+		out.push({
+			id: "tr-barnotable-1",
+			customerId: bn.id,
+			kind: "Llamada",
+			title: `Llamada con ${n}`,
+			at: at(3, 18, 40),
+			who: n,
+			durationMin: 5,
+			source: "Transcripción automática de la llamada",
+			text: [
+				`${fn}: ${JP.split(" ")[0]}, otra vez llegaron dos cajas con botellas rotas y nadie me dio respuesta del reclamo.`,
+				`${JP}: Tenés razón, lo siento. Lo gestiono hoy mismo con logística.`,
+				`${fn}: Además el pedido quedó frenado por las facturas vencidas y no puedo esperar tanto.`,
+				`${fn}: Mientras tanto estamos comprando a otra bodega que nos ofreció un 12 % y entrega en 48 horas.`,
+				`${JP}: Entiendo. Voy a pedir un plan de pago para las vencidas y te confirmo mañana.`,
+				`${fn}: Bueno, pero si no se resuelve esta semana vamos a cambiar la carta.`
+			].join("\n")
+		});
+	}
+	const hp = customerById("c-hotelpark");
+	if (hp) {
+		const n = hp.contacts[0]?.name ?? "Laura Gómez";
+		out.push({
+			id: "tr-hotelpark-1",
+			customerId: hp.id,
+			kind: "Correo",
+			title: "Correo · Brindis de fin de año",
+			at: at(5, 9, 30),
+			who: n,
+			source: "Correo (Microsoft 365)",
+			text: [
+				`De: ${n} <${hp.contacts[0]?.email ?? hp.email}>`,
+				"Asunto: Brindis de fin de año",
+				`Hola ${JP.split(" ")[0]}, el 12/12 tenemos el brindis de fin de año del hotel para 300 personas.`,
+				"Necesitamos 40 cajas de espumante y una propuesta de vinos para la cena.",
+				`¿Nos podrías pasar una propuesta antes del ${dm(14)}?`,
+				"Gracias, quedamos atentos."
+			].join("\n")
+		});
+	}
+	for (const t of out) t.analysis = iaAnalyze(t.text, {
+		at: t.at,
+		sellerName: JP,
+		clientName: t.who
+	});
+	return out;
+}
+function iaInteractionsOf(c) {
+	const S = iaState();
+	const seller = userById(c.sellerId)?.name ?? "Vendedor";
+	const client = c.contacts[0]?.name ?? c.name;
+	const items = S.transcripts.filter((t) => t.customerId === c.id).map((t) => ({
+		...t,
+		transcript: true,
+		tasksCreated: S.tasks[t.id] ?? 0
+	}));
+	for (const a of db.activities) {
+		if (a.customerId !== c.id || !a.done || a.type === "Tarea") continue;
+		const text = [
+			a.subject,
+			a.notes,
+			a.outcome ? `Resultado: ${a.outcome}.` : "",
+			a.nextAction ? `Próximo paso: ${a.nextAction}.` : ""
+		].filter(Boolean).map((x) => /[.!?]$/.test(x) ? x : `${x}.`).join(" ");
+		items.push({
+			id: a.id,
+			customerId: c.id,
+			kind: a.type,
+			title: a.subject,
+			at: a.date,
+			who: userById(a.userId)?.name ?? seller,
+			source: a.type === "Visita" ? "Nota de visita" : "Registro del CRM",
+			text,
+			tasksCreated: S.tasks[a.id] ?? 0
+		});
+	}
+	const byDay = /* @__PURE__ */ new Map();
+	for (const m of db.whatsapp) {
+		if (m.customerId !== c.id) continue;
+		const k = m.at.slice(0, 10);
+		const g = byDay.get(k) ?? [];
+		g.push(m);
+		byDay.set(k, g);
+	}
+	for (const [k, msgs] of byDay) {
+		msgs.sort((a, b) => a.at.localeCompare(b.at));
+		const who = (m) => m.direction === "system" ? "Sistema" : m.direction === "out" ? userById(m.by)?.name ?? seller : m.by ?? client;
+		items.push({
+			id: `wa-${c.id}-${k}`,
+			customerId: c.id,
+			kind: "WhatsApp",
+			title: `WhatsApp · ${msgs.length} mensaje${msgs.length === 1 ? "" : "s"}`,
+			at: msgs[msgs.length - 1].at,
+			who: msgs.find((m) => m.direction === "in")?.by ?? client,
+			source: "WhatsApp Business",
+			text: msgs.map((m) => `${who(m)}: ${m.text}`).join("\n"),
+			tasksCreated: S.tasks[`wa-${c.id}-${k}`] ?? 0
+		});
+	}
+	items.sort((a, b) => b.at.localeCompare(a.at));
+	return items.slice(0, 30).map((it) => ({
+		...it,
+		analysis: it.analysis ?? iaAnalyze(it.text, {
+			at: it.at,
+			sellerName: seller,
+			clientName: it.who
+		})
+	}));
+}
+// ───────────────────────── Caso 1 · Salud de cuenta ─────────────────────────
+function healthOf(c) {
+	const T = today();
+	const t = T.getTime();
+	const p = profile(c);
+	const f = financials(c);
+	const invs = invoicesOf(c.id).slice().sort((a, b) => a.date.localeCompare(b.date));
+	const win = (a, b) => invs.filter((i) => {
+		const x = t - new Date(i.date).getTime();
+		return x >= a * DAY && x < b * DAY;
+	});
+	const recent = win(0, 90), prior = win(90, 270);
+	const fRecent = recent.length / 3, fPrior = prior.length / 6;
+	const avg = (a) => a.length ? a.reduce((s, i) => s + i.amount, 0) / a.length : 0;
+	const factors = [];
+	const add = (key, label, points, text, evidence) => {
+		if (points > .5) factors.push({
+			key,
+			label,
+			points: Math.round(points),
+			text,
+			evidence
+		});
+	};
+	if (fPrior >= .3 && fRecent < fPrior * .8) {
+		const drop = 1 - fRecent / fPrior;
+		add("frecuencia", "Compra menos seguido", Math.min(30, drop * 36), `De ${iaN1(fPrior)} a ${iaN1(fRecent)} pedidos por mes en los últimos 90 días (−${Math.round(drop * 100)} %).`, "F42119 · ventas facturadas por mes");
+	}
+	const expected = fPrior > 0 ? 30 / fPrior : 60;
+	if (p.daysInactive < 9999 && p.daysInactive > Math.max(45, expected * 1.8)) add("recencia", "Sin compras recientes", Math.min(32, p.daysInactive / expected * 5), `No compra hace ${p.daysInactive} días; su ritmo habitual era cada ${Math.round(expected)} días.`, `Última factura ${invs.at(-1)?.doc ?? "—"}`);
+	if (recent.length >= 2 && prior.length >= 2 && avg(recent) < avg(prior) * .8) {
+		const drop = 1 - avg(recent) / avg(prior);
+		add("ticket", "Ticket más bajo", Math.min(18, drop * 40), `Ticket promedio ${fmtUSD(avg(recent))} contra ${fmtUSD(avg(prior))} en los meses anteriores (−${Math.round(drop * 100)} %).`, "F42119 · importe por factura");
+	}
+	const held = ordersOf(c.id).find((o) => o.hold && o.status !== "999");
+	if (f.overdue > 0) add("deuda", "Deuda vencida", Math.min(24, 8 + f.overdue / Math.max(c.creditLimit || 0, 5e3) * 30), `${fmtUSD(f.overdue)} vencidos en ${f.overdueDocs} factura${f.overdueDocs === 1 ? "" : "s"}${held ? ` y SO ${held.so} retenido (${held.hold})` : ""}.`, `F03B11 vencidos${held ? ` · F4201 hold ${held.hold}` : ""}`);
+	else if (held) add("retenido", "Pedido retenido", 10, `SO ${held.so} retenido por ${held.hold === "C1" ? "límite de crédito" : held.hold === "C2" ? "facturas vencidas" : "margen/descuento"} (${held.hold}).`, `F4201 hold ${held.hold}`);
+	if (p.mixBreaks.length) add("mix", "Dejó una línea", 7 * p.mixBreaks.length, `Dejó de comprar ${p.mixBreaks.join(" y ")} en los últimos 6 meses.`, "F42119 · ventas por línea");
+	const claims = db.activities.filter((a) => a.customerId === c.id && a.type === "Reclamo" && daysBetween(a.date, T) <= 90);
+	const openClaim = claims.find((a) => a.outcome !== "Resuelto");
+	if (openClaim) add("reclamo", "Reclamo abierto", 14, `${openClaim.subject}: sin cerrar hace ${daysBetween(openClaim.date, T)} días.`, "CRM · reclamos");
+	else if (claims.length) add("reclamo", "Reclamo reciente", 4, `${claims[0].subject} (resuelto).`, "CRM · reclamos");
+	const lastInt = p.lastInteraction ? daysBetween(p.lastInteraction, T) : 9999;
+	if (p.active && lastInt > 45) add("contacto", "Poco contacto", Math.min(12, lastInt / 10), lastInt < 9999 ? `Sin visitas ni mensajes hace ${lastInt} días.` : "No registra interacciones en el CRM.", "CRM · visitas, WhatsApp y correos");
+	const lost = db.opportunities.find((o) => o.customerId === c.id && o.stage === "Perdida" && daysBetween(o.closeDate, T) <= 120);
+	if (lost) add("competencia", "Perdió frente a la competencia", 9, `${lost.name}: perdida por ${(lost.lostReason ?? "motivo sin cargar").toLowerCase()}${lost.competitor ? ` (${lost.competitor})` : ""}.`, `Oportunidad ${lost.id}`);
+	const tr = iaState().transcripts.filter((x) => x.customerId === c.id && daysBetween(x.at, T) <= 30);
+	const sour = tr.find((x) => x.analysis.sentiment.label === "negativo" || x.analysis.signals.some((s) => s.case === "precio"));
+	if (sour) add("conversaciones", sour.analysis.sentiment.label === "negativo" ? "Malestar en conversaciones" : "Tentado por la competencia", sour.analysis.sentiment.label === "negativo" ? 12 : 6, `${sour.title} (${fmtDate(sour.at)}): ${sour.analysis.topics.map((x) => x.label.toLowerCase()).slice(0, 3).join(", ")}.`, "Asistente de interacciones");
+	const sum = factors.reduce((s, x) => s + x.points, 0);
+	const score = Math.round(iaClamp(100 - sum, 4, 100));
+	const level = score >= 70 ? "verde" : score >= 45 ? "amarillo" : "rojo";
+	factors.sort((a, b) => b.points - a.points);
+	const top = factors.slice(0, 3);
+	const topSum = top.reduce((s, x) => s + x.points, 0) || 1;
+	const ACTIONS = {
+		frecuencia: "Visita esta semana con una propuesta de reposición y su lista de favoritos.",
+		recencia: "Llamar hoy y agendar una visita de reactivación.",
+		ticket: "Revisar el mix con el cliente y ofrecer las sugerencias de “Qué ofrecerle ahora”.",
+		deuda: "Acordar un plan de pago con Créditos y liberar el pedido retenido.",
+		retenido: "Pedir la liberación del pedido o la ampliación del límite.",
+		mix: "Ofrecer la línea que dejó con la promoción vigente.",
+		reclamo: "Cerrar el reclamo con Logística y avisar al cliente.",
+		contacto: "Agendar una visita: hace mucho que no hay contacto.",
+		competencia: "Preparar una contrapropuesta con el descuento recomendado.",
+		conversaciones: "Llamar al cliente para resolver lo que planteó en la última conversación."
+	};
+	return {
+		customerId: c.id,
+		name: c.name,
+		an8: c.an8,
+		channel: c.channel,
+		category: c.category,
+		zone: c.zone,
+		sellerId: c.sellerId,
+		sellerName: userById(c.sellerId)?.name ?? "—",
+		score,
+		level,
+		sales12m: p.sales12m,
+		reasons: top.map((x) => ({
+			...x,
+			weight: Math.round(x.points / topSum * 100)
+		})),
+		factors,
+		action: top[0] ? ACTIONS[top[0].key] : "Cuenta sana: mantener la frecuencia de visitas.",
+		monthly: p.monthly,
+		alertedAt: iaState().alerted[c.id]
+	};
+}
+function iaHealthRows(user) {
+	return visibleCustomers(user).filter((c) => c.status === "activo").map((c) => {
+		const p = profile(c);
+		return p.daysInactive >= 9999 ? null : c;
+	}).filter(Boolean).map(healthOf);
+}
+// ───────────────────────── Caso 2 · Next Best Action ─────────────────────────
+var iaSkuKey = "";
+var iaSkuIdx = /* @__PURE__ */ new Map();
+function iaSkuIndex() {
+	const key = `${db.seededAt}|${db.invoices.length}`;
+	if (key === iaSkuKey) return iaSkuIdx;
+	iaSkuKey = key;
+	iaSkuIdx = /* @__PURE__ */ new Map();
+	const T = today();
+	const y = T.getFullYear() - 1;
+	const seasonFrom = new Date(y, 10, 1).getTime(), seasonTo = new Date(y, 11, 31, 23).getTime();
+	for (const i of db.invoices) {
+		const t = new Date(i.date).getTime();
+		const age = (T.getTime() - t) / DAY;
+		const e = iaSkuIdx.get(i.customerId) ?? {
+			skus: /* @__PURE__ */ new Map(),
+			lines6m: /* @__PURE__ */ new Set(),
+			espSeason: 0
+		};
+		for (const l of i.lines) {
+			const pr = productBySku(l.sku);
+			if (!pr) continue;
+			if (t >= seasonFrom && t <= seasonTo && pr.line === "Espumantes") e.espSeason += l.qty;
+			if (age > 365) continue;
+			e.skus.set(l.sku, (e.skus.get(l.sku) ?? 0) + l.qty);
+			if (age <= 182) e.lines6m.add(pr.line);
+		}
+		iaSkuIdx.set(i.customerId, e);
+	}
+	return iaSkuIdx;
+}
+function nbaFor(c, limit = 4) {
+	const S = iaState();
+	const idx = iaSkuIndex();
+	const T = today();
+	const empty = {
+		skus: /* @__PURE__ */ new Map(),
+		lines6m: /* @__PURE__ */ new Set(),
+		espSeason: 0
+	};
+	const mine = idx.get(c.id) ?? empty;
+	const active = db.customers.filter((x) => x.id !== c.id && x.status === "activo" && (idx.get(x.id)?.skus.size ?? 0) > 0);
+	let peers = active.filter((x) => x.channel === c.channel && x.category === c.category);
+	let peerLabel = `${IA_CHANNEL_PLURAL[c.channel] ?? c.channel} ${c.category}`;
+	if (peers.length < 10) {
+		peers = active.filter((x) => x.channel === c.channel);
+		peerLabel = IA_CHANNEL_PLURAL[c.channel] ?? c.channel;
+	}
+	if (peers.length < 5) {
+		peers = active;
+		peerLabel = "clientes activos";
+	}
+	const n = peers.length || 1;
+	const seasonal = T.getMonth() >= 9;
+	const prof = profile(c);
+	const dismissed = new Set(S.feedback.filter((f) => f.kind === "nba" && f.customerId === c.id && f.action === "descartada").map((f) => f.sku));
+	const out = [];
+	for (const pr of db.products) {
+		if (!pr.active || mine.skus.has(pr.sku) || dismissed.has(pr.sku)) continue;
+		const adopters = peers.filter((x) => idx.get(x.id).skus.has(pr.sku));
+		const adoption = adopters.length / n;
+		const isSeason = seasonal && pr.line === "Espumantes";
+		if (adoption < .15 && !(isSeason && mine.espSeason > 0)) continue;
+		const st = db.stock.find((s) => s.sku === pr.sku && s.branch === c.branch);
+		const avail = st ? st.onHand - st.committed : 0;
+		if (avail < pr.unitsPerCase * 2) continue;
+		const nowIso = T.toISOString();
+		const promo = db.promotions.find((x) => x.active && x.validFrom <= nowIso && x.validTo >= nowIso && x.channels.includes(c.channel) && (x.line === pr.line || x.skus?.includes(pr.sku)));
+		const base = [...mine.skus.entries()].map(([sku, q]) => ({
+			p: productBySku(sku),
+			q
+		})).filter((b) => b.p && b.p.line === pr.line && b.p.varietal === pr.varietal && b.p.price < pr.price && pr.price <= b.p.price * 2.2).sort((a, b) => b.q - a.q)[0]?.p;
+		const mixBreak = prof.mixBreaks.includes(pr.line);
+		const pct0 = Math.round(adoption * 100);
+		let type, argument, prob = .12 + adoption * .6 + (promo ? .08 : 0) + (mixBreak ? .06 : 0);
+		if (isSeason) {
+			type = "Estacional";
+			prob += mine.espSeason > 0 ? .2 : .04;
+			argument = mine.espSeason > 0 ? `En noviembre y diciembre de ${T.getFullYear() - 1} compró ${mine.espSeason} botellas de espumantes. Para entregar antes de las fiestas, el pedido debería entrar antes del 20/11.` : `El ${pct0} % de ${peerLabel} compra ${pr.name} y diciembre concentra la venta de espumantes.`;
+		} else if (base) {
+			type = "Up-sell";
+			const buyBase = peers.filter((x) => idx.get(x.id).skus.has(base.sku));
+			const share = buyBase.length ? buyBase.filter((x) => idx.get(x.id).skus.has(pr.sku)).length / buyBase.length : 0;
+			prob += share * .2 - .04;
+			argument = `Compra ${base.name}. ${Math.max(1, Math.round(share * 10))} de cada 10 clientes con ese perfil suman ${pr.name}, un escalón de precio arriba.`;
+		} else {
+			type = "Cross-sell";
+			const lastLine = prof.byLine.find((b) => b.line === pr.line)?.last;
+			argument = `El ${pct0} % de ${peerLabel} compra ${pr.name}.${mixBreak && lastLine ? ` ${c.name} no compra ${pr.line} desde el ${fmtDate(lastLine)}.` : !mine.lines6m.has(pr.line) ? ` Sería una línea nueva para el cliente.` : ""}`;
+		}
+		if (promo) argument += ` Promoción “${promo.name}” vigente hasta el ${fmtDate(promo.validTo)}.`;
+		const cases = isSeason && mine.espSeason > 0 ? Math.max(2, Math.round(mine.espSeason / pr.unitsPerCase)) : 2;
+		out.push({
+			sku: pr.sku,
+			product: pr.name,
+			line: pr.line,
+			type,
+			argument,
+			probability: Math.round(iaClamp(prob, .05, .9) * 100),
+			adoption: pct0,
+			peers: n,
+			peerLabel,
+			cases,
+			unitsPerCase: pr.unitsPerCase,
+			value: round2$1(pr.price * pr.unitsPerCase * cases),
+			stock: avail,
+			branch: c.branch,
+			promo: promo ? promo.name : void 0
+		});
+	}
+	out.sort((a, b) => b.probability * Math.sqrt(b.value) - a.probability * Math.sqrt(a.value));
+	const picked = [];
+	const perLine = /* @__PURE__ */ new Map();
+	for (const s of out) {
+		if ((perLine.get(s.line) ?? 0) >= 2) continue;
+		perLine.set(s.line, (perLine.get(s.line) ?? 0) + 1);
+		picked.push(s);
+		if (picked.length >= limit) break;
+	}
+	return picked;
+}
+// ───────────────────────── Caso 4 · Precio y descuento recomendado ─────────────────────────
+function iaSeedProposals() {
+	const r = new Rng(7331);
+	const baseCh = {
+		Vinoteca: .36,
+		Restaurante: .4,
+		Bar: .38,
+		Hotel: .44,
+		"Almacén gourmet": .34,
+		Supermercado: .3,
+		Distribuidor: .48
+	};
+	const lineAdj = {
+		Zuccardi: -.03,
+		"Santa Julia": .02,
+		Espumantes: 0,
+		Aceites: .03
+	};
+	const out = [];
+	for (let i = 0; i < 1400; i++) {
+		const channel = r.weighted(CHANNEL_MIX);
+		const line = r.pick(LINES$1);
+		const competitor = r.chance(.28);
+		const d = iaClamp(r.weighted([
+			[0, 3],
+			[2, 4],
+			[3, 4],
+			[5, 6],
+			[6, 5],
+			[8, 5],
+			[10, 4],
+			[12, 3],
+			[14, 2],
+			[15, 2],
+			[18, 1]
+		]) + Math.round((r.float() - .5) * 20) / 10, 0, 20);
+		const a = baseCh[channel] + lineAdj[line] - (competitor ? .1 : 0);
+		const b = Math.min(.92, a + .42 + (competitor ? .06 : 0));
+		const k = competitor ? 5 : 3.2;
+		const p = a + (b - a) * (1 - Math.exp(-d / k));
+		out.push({
+			channel,
+			line,
+			competitor,
+			discount: d,
+			won: r.chance(p),
+			cases: r.int(5, 120),
+			date: iso(daysAgo(r.int(5, 720)))
+		});
+	}
+	return out;
+}
+function iaFitCurve(points) {
+	const bins = [];
+	for (let x = 0; x < 20; x += 2) {
+		const inBin = points.filter((pt) => pt.discount >= x && pt.discount < x + 2);
+		if (inBin.length) bins.push({
+			d: x + 1,
+			n: inBin.length,
+			rate: inBin.filter((pt) => pt.won).length / inBin.length
+		});
+	}
+	let best = {
+		a: .35,
+		b: .75,
+		k: 3,
+		err: Infinity
+	};
+	for (let a = .1; a <= .7; a += .02) for (let b = a + .06; b <= .95; b += .02) for (let k = 1; k <= 8; k += .5) {
+		let err = 0;
+		for (const bn of bins) {
+			const p = a + (b - a) * (1 - Math.exp(-bn.d / k));
+			err += bn.n * (bn.rate - p) ** 2;
+		}
+		if (err < best.err) best = {
+			a,
+			b,
+			k,
+			err
+		};
+	}
+	return {
+		...best,
+		bins
+	};
+}
+function iaQuoteLatest(q) {
+	return q.versions[q.versions.length - 1];
+}
+function iaPricingFor(q) {
+	const S = iaState();
+	const c = customerById(q.customerId);
+	const v = iaQuoteLatest(q);
+	const fx = db.settings.fx[q.currency] ?? 1;
+	const byLine = /* @__PURE__ */ new Map();
+	let list = 0, net = 0;
+	for (const l of v.lines) {
+		if (l.freeOfCharge) continue;
+		const pr = productBySku(l.sku);
+		const lv = (l.listPrice ?? l.unitPrice) * l.qty / fx;
+		list += lv;
+		net += l.amount / fx;
+		if (pr) byLine.set(pr.line, (byLine.get(pr.line) ?? 0) + lv);
+	}
+	const line = [...byLine.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] ?? "Zuccardi";
+	const cost = [...byLine.entries()].reduce((s, [ln, lv]) => s + lv * (IA_LINE_COST[ln] ?? .55), 0) || list * .55;
+	const current = list ? Math.round((1 - net / list) * 1e3) / 10 : 0;
+	const comp = S.transcripts.filter((t) => t.customerId === q.customerId).flatMap((t) => t.analysis.signals.filter((s) => s.case === "precio").map((s) => ({
+		...s,
+		at: t.at,
+		title: t.title
+	})))[0];
+	let pts = S.proposals.filter((x) => x.channel === c?.channel && x.line === line && (!comp || x.competitor));
+	let segment = `${IA_CHANNEL_PLURAL[c?.channel] ?? "clientes"} · ${line}${comp ? " · con competidor en la negociación" : ""}`;
+	if (pts.length < 60) {
+		pts = S.proposals.filter((x) => x.channel === c?.channel && (!comp || x.competitor));
+		segment = `${IA_CHANNEL_PLURAL[c?.channel] ?? "clientes"} · todas las líneas${comp ? " · con competidor" : ""}`;
+	}
+	if (pts.length < 60) {
+		pts = S.proposals;
+		segment = "todas las propuestas";
+	}
+	const fit = iaFitCurve(pts);
+	const policyMax = Math.max(...Object.values(db.settings.maxDiscountByRole));
+	const sellerMax = db.settings.maxDiscountByRole.vendedor ?? 10;
+	const top = Math.min(20, policyMax);
+	const curve = [];
+	for (let d = 0; d <= top + 1e-9; d += .5) {
+		const p = fit.a + (fit.b - fit.a) * (1 - Math.exp(-d / fit.k));
+		const netD = list * (1 - d / 100);
+		const m = netD - cost;
+		curve.push({
+			d,
+			p: Math.round(p * 1e3) / 10,
+			marginPct: netD ? Math.round(m / netD * 1e3) / 10 : 0,
+			marginUSD: round2$1(m),
+			expected: round2$1(p * m)
+		});
+	}
+	const bestPt = curve.reduce((a, b) => b.expected > a.expected ? b : a, curve[0]);
+	const near = curve.filter((x) => x.expected >= bestPt.expected * .985);
+	const at = (d) => {
+		const x = Math.min(top, Math.max(0, d));
+		const p = fit.a + (fit.b - fit.a) * (1 - Math.exp(-x / fit.k));
+		const netD = list * (1 - x / 100);
+		return {
+			d: Math.round(x * 10) / 10,
+			p: Math.round(p * 1e3) / 10,
+			marginPct: netD ? Math.round((netD - cost) / netD * 1e3) / 10 : 0,
+			marginUSD: round2$1(netD - cost)
+		};
+	};
+	return {
+		quote: {
+			id: q.id,
+			status: q.status,
+			currency: q.currency,
+			createdAt: q.createdAt,
+			version: v.version,
+			lines: v.lines.length,
+			total: v.total
+		},
+		customer: c ? {
+			id: c.id,
+			name: c.name,
+			channel: c.channel,
+			category: c.category
+		} : void 0,
+		line,
+		listUSD: round2$1(list),
+		costUSD: round2$1(cost),
+		currentDiscount: current,
+		policyMax,
+		sellerMax,
+		curve,
+		recommended: {
+			d: bestPt.d,
+			from: near[0].d,
+			to: near[near.length - 1].d
+		},
+		atRecommended: at(bestPt.d),
+		atCurrent: at(current),
+		basis: {
+			n: pts.length,
+			won: pts.filter((x) => x.won).length,
+			segment,
+			bins: fit.bins.map((b) => ({
+				d: b.d,
+				n: b.n,
+				rate: Math.round(b.rate * 1e3) / 10
+			})),
+			competitor: comp ? {
+				pct: comp.pct,
+				text: comp.text,
+				at: comp.at,
+				title: comp.title
+			} : void 0
+		},
+		decisions: S.decisions.filter((x) => x.quoteId === q.id)
+	};
+}
+// ───────────────────────── Caso 5 · Calidad de datos ─────────────────────────
+/** Simula datos cargados a mano en el CRM (teléfonos en formato local, correos en mayúsculas, campos vacíos). */
+function iaInjectLegacyData() {
+	const r = new Rng(4242);
+	const skip = new Set([
+		"c-lacava",
+		"c-barnotable",
+		"c-hotelpark",
+		"c-sietefuegos"
+	]);
+	// Prospectos cargados desde WhatsApp o el formulario web que en realidad ya son clientes de JDE.
+	const dupLead = (c, name, source, days, samePhone = true) => db.leads.push({
+		id: `LD-${300 + db.leads.filter((l) => l.id.startsWith("LD-3")).length + 1}`,
+		name,
+		contactName: c.contacts[0]?.name ?? "—",
+		phone: samePhone ? c.contacts[0]?.phone ?? c.phone : `+54 9 261 ${r.int(400, 699)}-${r.int(1e3, 9999)}`,
+		email: `info@${(c.email ?? "").split("@")[1] ?? "cliente.com.ar"}`,
+		channel: c.channel,
+		city: c.city,
+		source,
+		score: r.int(25, 60),
+		status: "Nuevo",
+		sellerId: c.sellerId,
+		createdAt: iso(daysAgo(days, r.int(8, 18), 0))
+	});
+	const bn = customerById("c-barnotable");
+	if (bn) dupLead(bn, "Notable Bar Mendoza", "WhatsApp", 3);
+	const sf = customerById("c-sietefuegos");
+	if (sf) dupLead(sf, "Siete Fuegos Restaurante", "Formulario web", 6, false);
+	for (const c of r.shuffle(db.customers.filter((x) => x.status === "activo" && !skip.has(x.id))).slice(0, 8)) {
+		const base = c.name.replace(/^(Vinoteca|Restaurante|Bar|Hotel) /, "").replace(/ (SRL|SA)$/, "");
+		dupLead(c, `${base} ${c.city}`, r.pick([
+			"WhatsApp",
+			"Formulario web",
+			"Feria / evento"
+		]), r.int(1, 25), r.chance(.6));
+	}
+	for (const c of db.customers) {
+		if (skip.has(c.id) || !c.contacts.length || !r.chance(c.sellerId === "u-jperez" ? .45 : .14)) continue;
+		const ct = c.contacts[0];
+		const kind = r.pick([
+			"phone",
+			"phone",
+			"email",
+			"name",
+			"noemail",
+			"attr"
+		]);
+		if (kind === "phone") {
+			const m = /^\+54 9 (\d+) (\d+)-(\d+)$/.exec(ct.phone);
+			if (m) ct.phone = `0${m[1]} 15 ${m[2]}-${m[3]}`;
+		} else if (kind === "email" && ct.email) ct.email = ` ${ct.email.toUpperCase()}`;
+		else if (kind === "name") ct.name = ct.name.toUpperCase();
+		else if (kind === "noemail") ct.email = "";
+		else if (kind === "attr" && "Responsable de compras" in c.attributes) c.attributes["Responsable de compras"] = "";
+	}
+}
+var iaTitle = (s) => s.toLowerCase().replace(/(^|[\s-])(\S)/g, (_m, a, b) => a + b.toUpperCase());
+function iaFixesOf(c) {
+	const out = [];
+	c.contacts.forEach((ct, i) => {
+		const ref = `${c.id}|ct|${i}`;
+		const m = /^0(\d{2,4}) 15 (\d+)-(\d+)$/.exec(ct.phone ?? "");
+		if (m) out.push({
+			id: `${ref}|phone`,
+			customerId: c.id,
+			name: c.name,
+			field: `Teléfono de ${iaTitle(ct.name)}`,
+			from: ct.phone,
+			to: `+54 9 ${m[1]} ${m[2]}-${m[3]}`,
+			confidence: 99,
+			kind: "Normalizar",
+			owner: "CRM"
+		});
+		if (ct.email && ct.email !== ct.email.trim().toLowerCase()) out.push({
+			id: `${ref}|email`,
+			customerId: c.id,
+			name: c.name,
+			field: `Correo de ${iaTitle(ct.name)}`,
+			from: ct.email,
+			to: ct.email.trim().toLowerCase(),
+			confidence: 98,
+			kind: "Normalizar",
+			owner: "CRM"
+		});
+		if (ct.name && ct.name === ct.name.toUpperCase() && /[A-Z]/.test(ct.name)) out.push({
+			id: `${ref}|name`,
+			customerId: c.id,
+			name: c.name,
+			field: "Nombre del contacto",
+			from: ct.name,
+			to: iaTitle(ct.name),
+			confidence: 96,
+			kind: "Normalizar",
+			owner: "CRM"
+		});
+		if (i === 0 && !ct.email) {
+			const dom = (c.email ?? "").split("@")[1];
+			if (dom) out.push({
+				id: `${ref}|noemail`,
+				customerId: c.id,
+				name: c.name,
+				field: `Correo de ${iaTitle(ct.name)}`,
+				from: "vacío",
+				to: `${ct.name.split(" ")[0].toLowerCase().normalize("NFD").replace(/[^a-z]/g, "")}@${dom}`,
+				confidence: 72,
+				kind: "Autocompletar",
+				owner: "CRM",
+				note: "Deducido del dominio del correo de la empresa: confirmar con el cliente."
+			});
+		}
+	});
+	if ("Responsable de compras" in c.attributes && !c.attributes["Responsable de compras"] && c.contacts[0]) out.push({
+		id: `${c.id}|attr|resp`,
+		customerId: c.id,
+		name: c.name,
+		field: "Responsable de compras",
+		from: "vacío",
+		to: iaTitle(c.contacts[0].name),
+		confidence: 93,
+		kind: "Autocompletar",
+		owner: "CRM",
+		note: "Tomado del contacto con rol “Responsable de compras”."
+	});
+	for (const s of c.shipTos) if (!s.glnConfirmed) out.push({
+		id: `${c.id}|gln|${s.an8}`,
+		customerId: c.id,
+		name: c.name,
+		field: `GLN de ${s.name}`,
+		from: s.gln,
+		to: "Confirmar en el próximo relevamiento",
+		confidence: 60,
+		kind: "Revisar",
+		owner: "JDE",
+		note: "Dato de JDE: se confirma con un relevamiento “Confirmación de GLN” y viaja por el circuito de cambios."
+	});
+	return out;
+}
+function iaApplyFix(fx) {
+	const [cid, kind, a, b] = fx.id.split("|");
+	const c = customerById(cid);
+	if (!c) return false;
+	if (kind === "ct") {
+		const ct = c.contacts[Number(a)];
+		if (!ct) return false;
+		if (b === "phone") ct.phone = fx.to;
+		else if (b === "email" || b === "noemail") ct.email = fx.to;
+		else if (b === "name") ct.name = fx.to;
+		else return false;
+		return true;
+	}
+	if (kind === "attr") {
+		c.attributes["Responsable de compras"] = fx.to;
+		return true;
+	}
+	return false;
+}
+/** Parecido de nombres sin el rubro ni la ciudad: el mayor entre Jaccard y la contención de palabras. */
+function iaNameSim(a, b) {
+	const strip = (s) => tokens(s).filter((t) => ![
+		"vinoteca",
+		"restaurante",
+		"bar",
+		"hotel",
+		"mendoza"
+	].includes(t));
+	const x = new Set(strip(a)), y = new Set(strip(b));
+	if (!x.size || !y.size) return similarity(a, b);
+	let inter = 0;
+	for (const t of x) if (y.has(t)) inter++;
+	return Math.max(inter / (x.size + y.size - inter), inter / Math.min(x.size, y.size) * .9);
+}
+function iaDigits(s) {
+	return String(s ?? "").replace(/\D/g, "").slice(-8);
+}
+function iaDuplicates(user) {
+	const S = iaState();
+	const custs = visibleCustomers(user);
+	const ids = visibleSellerIds(user);
+	const out = [];
+	for (const l of db.leads) {
+		if (l.status === "Convertido" || l.status === "Descartado" || S.merged[l.id]) continue;
+		if (ids && l.sellerId && !ids.includes(l.sellerId)) continue;
+		let best, bestSim = 0;
+		for (const c of l.duplicateOf ? [customerById(l.duplicateOf)].filter(Boolean) : custs) {
+			const sim = iaNameSim(l.name, c.name);
+			if (sim > bestSim) {
+				bestSim = sim;
+				best = c;
+			}
+		}
+		if (!best || bestSim < .5 && !l.duplicateOf) continue;
+		const phones = [best.phone, ...best.contacts.map((x) => x.phone)].map(iaDigits);
+		const samePhone = phones.includes(iaDigits(l.phone));
+		const domA = (l.email ?? "").split("@")[1], domB = (best.email ?? "").split("@")[1];
+		const matches = [
+			{
+				field: "Nombre",
+				kind: bestSim >= .99 ? "igual" : "parecido",
+				pct: Math.round(bestSim * 100)
+			},
+			{
+				field: "Teléfono",
+				kind: samePhone ? "igual" : "distinto"
+			},
+			{
+				field: "Ciudad",
+				kind: l.city === best.city ? "igual" : "distinto"
+			},
+			{
+				field: "Canal",
+				kind: l.channel === best.channel ? "igual" : "distinto"
+			},
+			{
+				field: "Dominio de correo",
+				kind: domA && domA === domB ? "igual" : "distinto"
+			}
+		];
+		const score = Math.round(iaClamp(bestSim * 55 + (samePhone ? 25 : 0) + (l.city === best.city ? 10 : 0) + (l.channel === best.channel ? 8 : 0) + (domA && domA === domB ? 10 : 0), 0, 99));
+		if (score < (l.duplicateOf ? 35 : 55) || S.dismissed[`${l.id}|${best.id}`]) continue;
+		out.push({
+			id: `${l.id}|${best.id}`,
+			score,
+			matches,
+			a: {
+				id: best.id,
+				kind: "Cliente JDE",
+				name: best.name,
+				an8: best.an8,
+				detail: `${best.cuit} · ${best.address}, ${best.city} · ${best.phone}`
+			},
+			b: {
+				id: l.id,
+				kind: `Prospecto CRM · ${l.source}`,
+				name: l.name,
+				detail: `${l.contactName} · ${l.city} · ${l.phone}`,
+				createdAt: l.createdAt
+			}
+		});
+	}
+	return out.sort((a, b) => b.score - a.score);
+}
+function iaQuality(user) {
+	const custs = visibleCustomers(user).filter((c) => c.status !== "inhabilitado");
+	const dups = iaDuplicates(user);
+	const dupSet = new Set(dups.map((d) => d.a.id));
+	const fixes = [];
+	const records = custs.map((c) => {
+		const f = iaFixesOf(c);
+		fixes.push(...f);
+		const penalty = f.reduce((s, x) => s + (x.kind === "Revisar" ? 9 : x.kind === "Autocompletar" ? 7 : 6), 0) + (dupSet.has(c.id) ? 20 : 0) + (!c.lat || !c.lng ? 10 : 0);
+		return {
+			id: c.id,
+			name: c.name,
+			an8: c.an8,
+			channel: c.channel,
+			confidence: Math.round(iaClamp(100 - penalty, 30, 100)),
+			issues: f.length + (dupSet.has(c.id) ? 1 : 0)
+		};
+	});
+	const avg = records.length ? Math.round(records.reduce((s, r) => s + r.confidence, 0) / records.length) : 100;
+	const S = iaState();
+	return {
+		summary: {
+			records: records.length,
+			leads: db.leads.filter((l) => l.status !== "Convertido" && l.status !== "Descartado").length,
+			avgConfidence: avg,
+			above90: records.filter((r) => r.confidence >= 90).length,
+			duplicates: dups.length,
+			toNormalize: fixes.filter((f) => f.kind === "Normalizar").length,
+			toComplete: fixes.filter((f) => f.kind === "Autocompletar").length,
+			toReview: fixes.filter((f) => f.kind === "Revisar").length,
+			applied: S.applied.length
+		},
+		duplicates: dups.slice(0, 12),
+		fixes: fixes.sort((a, b) => b.confidence - a.confidence).slice(0, 80),
+		lowest: records.sort((a, b) => a.confidence - b.confidence).slice(0, 12),
+		applied: S.applied.slice(0, 20)
+	};
+}
+// ───────────────────────── Rutas ─────────────────────────
+intelligence.get("/api/ia/summary", (req, res) => {
+	const S = iaState();
+	const rows = iaHealthRows(req.user);
+	const q = iaQuality(req.user);
+	const mine = visibleCustomers(req.user).filter((c) => c.status === "activo").slice(0, 400);
+	const trCust = new Set(S.transcripts.filter((t) => mine.some((c) => c.id === t.customerId)).map((t) => t.customerId));
+	const quotes = db.quotes.filter((x) => mine.some((c) => c.id === x.customerId));
+	res.json({
+		health: {
+			rojo: rows.filter((r) => r.level === "rojo").length,
+			amarillo: rows.filter((r) => r.level === "amarillo").length,
+			verde: rows.filter((r) => r.level === "verde").length,
+			avg: rows.length ? Math.round(rows.reduce((s, r) => s + r.score, 0) / rows.length) : 0
+		},
+		nba: {
+			customers: mine.filter((c) => profile(c).active).length,
+			feedback: S.feedback.filter((f) => f.kind === "nba").length
+		},
+		interactions: {
+			transcripts: S.transcripts.filter((t) => trCust.has(t.customerId)).length,
+			commitments: S.transcripts.filter((t) => trCust.has(t.customerId)).reduce((s, t) => s + t.analysis.commitments.length, 0),
+			tasks: Object.values(S.tasks).reduce((s, n) => s + n, 0)
+		},
+		pricing: {
+			quotes: quotes.length,
+			proposals: S.proposals.length
+		},
+		quality: q.summary,
+		module: IA_MODULE
+	});
+});
+intelligence.get("/api/ia/health", (req, res) => {
+	const rows = iaHealthRows(req.user).sort((a, b) => a.score - b.score);
+	res.json({
+		generatedAt: iso(daysAgo(0, 3, 10)),
+		counts: {
+			rojo: rows.filter((r) => r.level === "rojo").length,
+			amarillo: rows.filter((r) => r.level === "amarillo").length,
+			verde: rows.filter((r) => r.level === "verde").length,
+			avg: rows.length ? Math.round(rows.reduce((s, r) => s + r.score, 0) / rows.length) : 0
+		},
+		rows: rows.map(({ factors, monthly, ...r }) => ({
+			...r,
+			top: r.reasons[0]?.label ?? "Sin señales de riesgo",
+			topText: r.reasons[0]?.text ?? ""
+		}))
+	});
+});
+intelligence.get("/api/ia/health/:id", (req, res) => {
+	const c = customerById(req.params.id);
+	if (!c || !canSeeCustomer(req.user, c)) {
+		res.status(404).json({ error: "Cliente inexistente o fuera de su cartera" });
+		return;
+	}
+	res.json(healthOf(c));
+});
+intelligence.post("/api/ia/health/:id/alert", (req, res) => {
+	const c = customerById(req.params.id);
+	if (!c || !canSeeCustomer(req.user, c)) {
+		res.status(404).json({ error: "Cliente inexistente" });
+		return;
+	}
+	const h = healthOf(c);
+	const seller = userById(c.sellerId);
+	const text = `Riesgo de fuga: ${c.name} bajó a ${h.score}/100 (${h.level}). Motivos: ${h.reasons.map((r) => r.label.toLowerCase()).join(", ")}. Sugerido: ${h.action}`;
+	const link = `/inteligencia?caso=salud&cliente=${c.id}`;
+	const sent = [];
+	if (seller) {
+		notify(seller.id, text, link, "Correo y WhatsApp");
+		waInternal(seller.id, text);
+		sent.push(seller.name);
+		if (seller.supervisorId) {
+			notify(seller.supervisorId, text, link, "Correo");
+			sent.push(userById(seller.supervisorId)?.name);
+		}
+	}
+	iaState().alerted[c.id] = (/* @__PURE__ */ new Date()).toISOString();
+	audit(req.user.id, "Alerta de riesgo de fuga (IA)", c.name, text);
+	res.json({
+		ok: true,
+		sentTo: sent.filter(Boolean)
+	});
+});
+intelligence.post("/api/ia/health/:id/visit", (req, res) => {
+	const c = customerById(req.params.id);
+	if (!c || !canSeeCustomer(req.user, c)) {
+		res.status(404).json({ error: "Cliente inexistente" });
+		return;
+	}
+	const h = healthOf(c);
+	const d = daysFromNow(1, 10, 0);
+	db.activities.push({
+		id: `act-ia-${Date.now()}`,
+		customerId: c.id,
+		type: "Visita",
+		date: iso(d),
+		userId: c.sellerId,
+		done: false,
+		subject: `Visita de retención (salud ${h.score}/100)`,
+		notes: `${h.reasons.map((r) => r.text).join(" ")} Sugerido: ${h.action}`
+	});
+	invalidate();
+	audit(req.user.id, "Visita de retención agendada (IA)", c.name);
+	res.json({
+		ok: true,
+		date: iso(d)
+	});
+});
+intelligence.post("/api/ia/feedback", (req, res) => {
+	const b = req.body ?? {};
+	iaState().feedback.push({
+		...b,
+		userId: req.user.id,
+		at: (/* @__PURE__ */ new Date()).toISOString()
+	});
+	const c = b.customerId ? customerById(b.customerId) : void 0;
+	audit(req.user.id, `Sugerencia ${b.action ?? "registrada"} (IA · ${b.kind ?? "módulo"})`, c?.name ?? "Inteligencia del CRM", [b.sku, b.reason].filter(Boolean).join(" · "));
+	res.json({ ok: true });
+});
+intelligence.get("/api/ia/nba", (req, res) => {
+	const custs = visibleCustomers(req.user).filter((c) => c.status === "activo" && profile(c).active);
+	if (req.query.customerId) {
+		const c = customerById(req.query.customerId);
+		if (!c || !canSeeCustomer(req.user, c)) {
+			res.status(404).json({ error: "Cliente inexistente o fuera de su cartera" });
+			return;
+		}
+		const p = profile(c);
+		res.json({
+			customer: {
+				id: c.id,
+				name: c.name,
+				an8: c.an8,
+				channel: c.channel,
+				category: c.category,
+				zone: c.zone,
+				branch: c.branch,
+				lines6m: p.byLine.filter((x) => x.bought).map((x) => x.line),
+				mixBreaks: p.mixBreaks,
+				sales12m: p.sales12m
+			},
+			suggestions: nbaFor(c, 4)
+		});
+		return;
+	}
+	const rows = custs.slice(0, 250).map((c) => {
+		const s = nbaFor(c, 1)[0];
+		return s ? {
+			customerId: c.id,
+			name: c.name,
+			channel: c.channel,
+			...s
+		} : null;
+	}).filter(Boolean).sort((a, b) => b.probability - a.probability);
+	res.json({
+		customers: custs.length,
+		rows: rows.slice(0, 40)
+	});
+});
+intelligence.get("/api/ia/interactions", (req, res) => {
+	const S = iaState();
+	const vis = visibleCustomers(req.user);
+	const visIds = new Set(vis.map((c) => c.id));
+	if (req.query.customerId) {
+		const c = customerById(req.query.customerId);
+		if (!c || !visIds.has(c.id)) {
+			res.status(404).json({ error: "Cliente inexistente o fuera de su cartera" });
+			return;
+		}
+		res.json({
+			customer: {
+				id: c.id,
+				name: c.name,
+				an8: c.an8,
+				channel: c.channel,
+				contact: c.contacts[0]?.name
+			},
+			items: iaInteractionsOf(c)
+		});
+		return;
+	}
+	const T = today();
+	const recent = /* @__PURE__ */ new Map();
+	for (const a of db.activities) if (a.done && a.customerId && visIds.has(a.customerId) && daysBetween(a.date, T) <= 30) recent.set(a.customerId, (recent.get(a.customerId) ?? 0) + 1);
+	for (const m of db.whatsapp) if (m.customerId && visIds.has(m.customerId) && daysBetween(m.at, T) <= 30) recent.set(m.customerId, (recent.get(m.customerId) ?? 0) + 1);
+	const withTr = new Set(S.transcripts.filter((t) => visIds.has(t.customerId)).map((t) => t.customerId));
+	const list = [...new Set([...withTr, ...recent.keys()])].map((id) => {
+		const c = customerById(id);
+		return {
+			id,
+			name: c.name,
+			channel: c.channel,
+			recent: recent.get(id) ?? 0,
+			transcripts: S.transcripts.filter((t) => t.customerId === id).length
+		};
+	}).sort((a, b) => b.transcripts - a.transcripts || b.recent - a.recent).slice(0, 60);
+	res.json({ customers: list });
+});
+intelligence.post("/api/ia/interactions/analyze", (req, res) => {
+	const text = String(req.body?.text ?? "").slice(0, 8e3);
+	if (text.trim().length < 10) {
+		res.status(400).json({ error: "Pegue un texto de al menos 10 caracteres." });
+		return;
+	}
+	const c = req.body?.customerId ? customerById(req.body.customerId) : void 0;
+	res.json(iaAnalyze(text, {
+		sellerName: req.user.name,
+		clientName: c?.contacts[0]?.name
+	}));
+});
+intelligence.post("/api/ia/interactions/tasks", (req, res) => {
+	const b = req.body ?? {};
+	const c = customerById(b.customerId);
+	if (!c || !canSeeCustomer(req.user, c)) {
+		res.status(404).json({ error: "Cliente inexistente" });
+		return;
+	}
+	const items = (b.items ?? []).slice(0, 8);
+	items.forEach((it, i) => db.activities.push({
+		id: `act-ia-${Date.now()}-${i}`,
+		customerId: c.id,
+		type: "Tarea",
+		date: it.due ?? iso(daysFromNow(2)),
+		userId: c.sellerId,
+		done: false,
+		subject: String(it.what ?? "Seguimiento").slice(0, 160),
+		notes: `Creada desde el asistente de interacciones (Inteligencia del CRM) · responsable: ${it.who ?? "vendedor"}`
+	}));
+	invalidate();
+	if (b.sourceId) iaState().tasks[b.sourceId] = (iaState().tasks[b.sourceId] ?? 0) + items.length;
+	audit(req.user.id, "Tareas creadas desde un resumen (IA)", c.name, `${items.length} tarea(s)`);
+	res.json({ created: items.length });
+});
+intelligence.get("/api/ia/pricing", (req, res) => {
+	const ids = visibleSellerIds(req.user);
+	const qs = db.quotes.filter((q) => (!ids || ids.includes(q.sellerId)) && q.versions?.length && iaQuoteLatest(q).lines.length).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+	const list = qs.slice(0, 30).map((q) => {
+		const c = customerById(q.customerId);
+		const v = iaQuoteLatest(q);
+		return {
+			id: q.id,
+			customerId: q.customerId,
+			customer: c?.name ?? "—",
+			status: q.status,
+			currency: q.currency,
+			total: v.total,
+			lines: v.lines.length,
+			createdAt: q.createdAt
+		};
+	});
+	const sel = qs.find((q) => q.id === req.query.quoteId) ?? qs[0];
+	res.json({
+		quotes: list,
+		selected: sel ? iaPricingFor(sel) : null
+	});
+});
+intelligence.post("/api/ia/pricing/decision", (req, res) => {
+	const b = req.body ?? {};
+	const q = db.quotes.find((x) => x.id === b.quoteId);
+	if (!q) {
+		res.status(404).json({ error: "Presupuesto inexistente" });
+		return;
+	}
+	const d = {
+		quoteId: q.id,
+		discount: Number(b.discount),
+		recommended: Number(b.recommended),
+		followed: Math.abs(Number(b.discount) - Number(b.recommended)) <= 1.5,
+		userId: req.user.id,
+		userName: req.user.name,
+		at: (/* @__PURE__ */ new Date()).toISOString()
+	};
+	iaState().decisions.unshift(d);
+	audit(req.user.id, "Decisión de descuento registrada (IA)", q.id, `${d.discount} % (recomendado ${d.recommended} %)`);
+	res.json(d);
+});
+intelligence.get("/api/ia/quality", (req, res) => res.json(iaQuality(req.user)));
+intelligence.post("/api/ia/quality/apply", (req, res) => {
+	const S = iaState();
+	const b = req.body ?? {};
+	const all = visibleCustomers(req.user).flatMap(iaFixesOf);
+	const targets = b.all ? all.filter((f) => f.owner === "CRM" && f.confidence >= (b.minConfidence ?? 95)) : all.filter((f) => f.id === b.id);
+	let n = 0;
+	for (const f of targets) {
+		if (f.owner !== "CRM") continue;
+		if (iaApplyFix(f)) {
+			n++;
+			S.applied.unshift({
+				...f,
+				at: (/* @__PURE__ */ new Date()).toISOString(),
+				by: req.user.name
+			});
+			audit(req.user.id, `Calidad de datos: ${f.kind.toLowerCase()} (IA)`, f.name, `${f.field}: ${f.from} → ${f.to}`);
+		}
+	}
+	if (!n && targets.some((f) => f.owner === "JDE")) {
+		res.status(409).json({ error: "Es un dato de JD Edwards: se corrige por el circuito de cambios de cliente, nunca directo desde el CRM." });
+		return;
+	}
+	res.json({ applied: n });
+});
+intelligence.post("/api/ia/quality/merge", (req, res) => {
+	const S = iaState();
+	const { leadId, customerId } = req.body ?? {};
+	const l = db.leads.find((x) => x.id === leadId);
+	const c = customerById(customerId);
+	if (!l || !c) {
+		res.status(404).json({ error: "Registro inexistente" });
+		return;
+	}
+	l.status = "Descartado";
+	l.duplicateOf = c.id;
+	l.notes = `${l.notes ? `${l.notes} · ` : ""}Fusionado con ${c.name} (AN8 ${c.an8}) por Inteligencia del CRM`;
+	S.merged[l.id] = c.id;
+	audit(req.user.id, "Duplicado fusionado (IA)", c.name, `${l.id} ${l.name} → AN8 ${c.an8}`);
+	res.json({ ok: true });
+});
+intelligence.post("/api/ia/quality/dismiss", (req, res) => {
+	iaState().dismissed[String(req.body?.id ?? "")] = true;
+	audit(req.user.id, "Duplicado descartado (IA)", "Calidad de datos", String(req.body?.id ?? ""));
+	res.json({ ok: true });
+});
+//#endregion
 //#region standalone/local-api.ts
 seed();
 startTicker();
+iaState();
 var routers = [
 	core,
 	quotes,
@@ -13208,7 +14694,8 @@ var routers = [
 	reports,
 	field,
 	assistant,
-	integration
+	integration,
+	intelligence
 ];
 var realFetch = window.fetch.bind(window);
 window.fetch = async (input, init) => {
@@ -33565,6 +35052,14 @@ var NAV = [
 				icon: /* @__PURE__ */ (0, import_jsx_runtime$51.jsx)(ChartColumnBig, { className: "size-4" })
 			}
 		]
+	},
+	{
+		group: "Inteligencia",
+		items: [{
+			to: "/inteligencia",
+			label: "Inteligencia del CRM",
+			icon: /* @__PURE__ */ (0, import_jsx_runtime$51.jsx)(Sparkles, { className: "size-4" })
+		}]
 	},
 	{
 		group: "Comunicación",
@@ -93419,6 +94914,10 @@ var init_Admin = __esmMin((() => {
 		"sistemas"
 	];
 	MODULE_INFO = {
+		"Inteligencia del CRM": {
+			text: "Salud de cuenta, qué ofrecerle ahora, resumen de interacciones, descuento recomendado y calidad de datos.",
+			icon: /* @__PURE__ */ (0, import_jsx_runtime$2.jsx)(WandSparkles, { className: "size-4" })
+		},
 		"Resumen con IA": {
 			text: "Resumen en lenguaje natural del cliente en el Panel JDE de la ficha.",
 			icon: /* @__PURE__ */ (0, import_jsx_runtime$2.jsx)(Sparkles, { className: "size-4" })
@@ -94094,6 +95593,967 @@ var init_Help = __esmMin((() => {
 	import_jsx_runtime = require_jsx_runtime();
 }));
 //#endregion
+//#region src/pages/intelligence/Intelligence.tsx
+var IA_CASES = [
+	{
+		key: "salud",
+		n: 1,
+		title: "Salud de cuenta y riesgo de fuga",
+		gives: "Retiene clientes antes de que se vayan",
+		output: "Semáforo por cliente, con los 3 motivos principales del riesgo y alerta al responsable"
+	},
+	{
+		key: "nba",
+		n: 2,
+		title: "Next Best Action (cross-sell y up-sell)",
+		gives: "Hace crecer la facturación por cliente",
+		output: "Tarjeta “qué ofrecerle ahora”, con producto, argumento y probabilidad de aceptación"
+	},
+	{
+		key: "interacciones",
+		n: 3,
+		title: "Asistente de interacciones (NLP)",
+		gives: "Ahorra tiempo y captura lo que hoy se pierde",
+		output: "Resumen automático de mails, llamadas y notas, con compromisos, próximos pasos y sentimiento"
+	},
+	{
+		key: "precio",
+		n: 4,
+		title: "Precio y descuento recomendado",
+		gives: "Protege el margen sin perder cierres",
+		output: "Rango de descuento sugerido por propuesta, según cliente y probabilidad de cierre"
+	},
+	{
+		key: "calidad",
+		n: 5,
+		title: "Calidad de datos automática",
+		gives: "Hace confiables los otros cuatro",
+		output: "Deduplicación, normalización y autocompletado, con score de confianza por registro"
+	}
+];
+var IA_LEVEL = {
+	rojo: {
+		dot: "#c0392b",
+		text: "text-red-700",
+		tone: "red",
+		label: "Riesgo alto"
+	},
+	amarillo: {
+		dot: "#e0a100",
+		text: "text-amber-700",
+		tone: "amber",
+		label: "Atención"
+	},
+	verde: {
+		dot: "#2e9d5b",
+		text: "text-emerald-700",
+		tone: "green",
+		label: "Sana"
+	}
+};
+var IA_TYPE_TONE = {
+	"Cross-sell": "wine",
+	"Up-sell": "teal",
+	Estacional: "amber"
+};
+var iaR, iaH;
+function IaFrag({ children }) {
+	return iaH(iaR.Fragment, null, children);
+}
+function IaSpark({ values, width = 220, height = 48, color = "#8a2b3a" }) {
+	const v = values.length ? values : [0];
+	const max = Math.max(...v, 1), min = Math.min(...v, 0);
+	const step = v.length > 1 ? width / (v.length - 1) : width;
+	const y = (x) => height - 6 - (x - min) / (max - min || 1) * (height - 12);
+	const d = v.map((x, i) => `${i ? "L" : "M"}${(i * step).toFixed(1)},${y(x).toFixed(1)}`).join(" ");
+	return iaH("svg", {
+		viewBox: `0 0 ${width} ${height}`,
+		width: "100%",
+		height,
+		preserveAspectRatio: "none",
+		style: { display: "block" }
+	}, iaH("path", {
+		d,
+		fill: "none",
+		stroke: color,
+		strokeWidth: 2,
+		vectorEffect: "non-scaling-stroke"
+	}), iaH("circle", {
+		cx: (v.length - 1) * step,
+		cy: y(v[v.length - 1]),
+		r: 3.5,
+		fill: color
+	}));
+}
+function IaPill({ tone = "neutral", children, className }) {
+	return iaH(Badge, {
+		tone,
+		className
+	}, children);
+}
+function IaEngineNote({ children }) {
+	return iaH("p", { className: "mt-3 flex items-start gap-1.5 text-[11.5px] text-muted" }, iaH(Sparkles, { className: "mt-0.5 size-3 shrink-0" }), children);
+}
+function IaCustomerSelect({ value, onChange, options, placeholder = "Elegir cliente…" }) {
+	return iaH(Select, {
+		value,
+		onChange: (e) => onChange(e.target.value),
+		className: "max-w-sm"
+	}, iaH("option", { value: "" }, placeholder), options.map((o) => iaH("option", {
+		key: o.id,
+		value: o.id
+	}, o.label)));
+}
+// ───────────── Resumen ─────────────
+function IaOverview({ go }) {
+	const { epoch } = useSession();
+	const { data, error } = useApi("/api/ia/summary", [epoch]);
+	if (error) return iaH(ErrorBox, { error });
+	if (!data) return iaH(Spinner, {});
+	const live = {
+		salud: `${data.health.rojo} en rojo · ${data.health.amarillo} en amarillo · promedio ${data.health.avg}/100`,
+		nba: `${data.nba.customers} clientes activos con sugerencias`,
+		interacciones: `${data.interactions.transcripts} conversaciones transcriptas · ${data.interactions.commitments} compromisos detectados`,
+		precio: `${data.pricing.quotes} presupuestos · ${data.pricing.proposals.toLocaleString("es-AR")} propuestas de historial`,
+		calidad: `Confianza promedio ${data.quality.avgConfidence} % · ${data.quality.duplicates} posibles duplicados`
+	};
+	return iaH("div", { className: "space-y-4" }, iaH(Card, {
+		title: "Módulo “Inteligencia del CRM”: 5 casos de uso",
+		subtitle: "Cada caso se muestra donde el vendedor ya trabaja: Mi día, la ficha, el presupuesto y las alertas",
+		icon: iaH(Sparkles, { className: "size-4" }),
+		bodyClass: "p-0"
+	}, iaH("div", { className: "overflow-auto" }, iaH("table", { className: "w-full text-sm" }, iaH("thead", null, iaH("tr", { className: "border-b border-sand text-left text-[11.5px] uppercase tracking-wide text-muted" }, iaH("th", { className: "px-4 py-2 font-medium" }, "#"), iaH("th", { className: "px-3 py-2 font-medium" }, "Caso de uso"), iaH("th", { className: "px-3 py-2 font-medium" }, "Qué aporta"), iaH("th", { className: "px-3 py-2 font-medium" }, "Salida en el CRM"), iaH("th", { className: "px-3 py-2 font-medium" }, "Hoy en la cartera"), iaH("th", { className: "px-3 py-2" }))), iaH("tbody", null, IA_CASES.map((c) => iaH("tr", {
+		key: c.key,
+		onClick: () => go(c.key),
+		className: cx("cursor-pointer border-b border-sand/60 last:border-0 hover:bg-cream/70", c.key === "calidad" && "bg-wine-50/30")
+	}, iaH("td", { className: "px-4 py-3 align-top font-serif text-lg text-wine-700" }, c.n), iaH("td", { className: "px-3 py-3 align-top font-semibold" }, c.title), iaH("td", { className: "px-3 py-3 align-top text-ink/80" }, c.gives), iaH("td", { className: "px-3 py-3 align-top text-ink/80" }, c.output), iaH("td", { className: "px-3 py-3 align-top text-[12.5px] text-teal-700" }, live[c.key]), iaH("td", { className: "px-3 py-3 align-top text-right" }, iaH(ArrowRight, { className: "size-4 text-muted" })))))))), iaH("div", { className: "grid gap-3 md:grid-cols-2 lg:grid-cols-4" }, [
+		[
+			"La IA sugiere",
+			"La persona decide: nada se envía, agenda ni modifica sin confirmación."
+		],
+		[
+			"Siempre con el porqué",
+			"Cada sugerencia muestra sus motivos y la evidencia en JDE o en el CRM."
+		],
+		[
+			"Datos protegidos",
+			"Respeta los permisos por cartera y nunca escribe en JDE por fuera de sus circuitos."
+		],
+		[
+			"Se apaga sin impacto",
+			"Módulo independiente: si se desactiva en Administración, el CRM y la integración siguen igual."
+		]
+	].map(([t, d]) => iaH("div", {
+		key: t,
+		className: "rounded-xl border border-sand bg-paper px-4 py-3"
+	}, iaH("div", { className: "text-[11.5px] font-semibold uppercase tracking-wide text-teal-700" }, t), iaH("div", { className: "mt-1 text-[13px] text-ink/80" }, d)))), iaH(Callout, {
+		tone: "amber",
+		icon: iaH(Lightbulb, { className: "size-4" }),
+		title: "Cómo funciona en la maqueta"
+	}, "Los cinco casos corren sobre los mismos datos ficticios del CRM y de JD Edwards simulado, con reglas y estadística explicables. En producción se reemplazan por modelos entrenados con el historial real de Zuccardi (y un modelo de lenguaje para resumir conversaciones), con la misma pantalla y las mismas reglas de control."));
+}
+// ───────────── Caso 1 · Salud de cuenta ─────────────
+function IaHealth({ preselect }) {
+	const { epoch } = useSession();
+	const toast = useToast();
+	const [filter, setFilter] = iaR.useState("todos");
+	const [q, setQ] = iaR.useState("");
+	const [sel, setSel] = iaR.useState(preselect ?? "");
+	const [busy, setBusy] = iaR.useState("");
+	const list = useApi("/api/ia/health", [epoch]);
+	const rows = list.data?.rows ?? [];
+	const shown = rows.filter((r) => (filter === "todos" || r.level === filter) && (!q || r.name.toLowerCase().includes(q.toLowerCase())));
+	const current = sel || rows[0]?.customerId || "";
+	const det = useApi(current ? `/api/ia/health/${current}` : null, [epoch, current]);
+	async function act(kind) {
+		setBusy(kind);
+		try {
+			if (kind === "alert") {
+				const r = await api.post(`/api/ia/health/${current}/alert`);
+				toast(`Alerta enviada a ${r.sentTo.join(" y ")} por correo y WhatsApp`);
+			} else if (kind === "visit") {
+				const r = await api.post(`/api/ia/health/${current}/visit`);
+				toast(`Visita de retención agendada para el ${dateShort(r.date)} a las 10:00`);
+			} else {
+				await api.post("/api/ia/feedback", {
+					kind: "salud",
+					action: "no aplica",
+					customerId: current,
+					reason: kind
+				});
+				toast("Gracias: el motivo ajusta el modelo", "info");
+			}
+			det.reload();
+		} catch (e) {
+			toast(e.message, "error");
+		} finally {
+			setBusy("");
+		}
+	}
+	if (list.error) return iaH(ErrorBox, { error: list.error });
+	if (!list.data) return iaH(Spinner, {});
+	const c = list.data.counts;
+	const h = det.data;
+	return iaH("div", { className: "space-y-4" }, iaH("div", { className: "grid gap-3 sm:grid-cols-2 lg:grid-cols-4" }, iaH(Stat, {
+		label: "Riesgo alto",
+		value: c.rojo,
+		tone: "red",
+		sub: "puntaje menor a 45"
+	}), iaH(Stat, {
+		label: "Atención",
+		value: c.amarillo,
+		tone: "amber",
+		sub: "entre 45 y 69"
+	}), iaH(Stat, {
+		label: "Sanas",
+		value: c.verde,
+		tone: "green",
+		sub: "70 o más"
+	}), iaH(Stat, {
+		label: "Puntaje promedio",
+		value: `${c.avg} / 100`,
+		sub: `Calculado hoy ${time$1(list.data.generatedAt)} con ventas de JDE e interacciones`
+	})), iaH("div", { className: "grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]" }, iaH(Card, {
+		title: "Cuentas por riesgo",
+		subtitle: `${shown.length} de ${rows.length} clientes`,
+		bodyClass: "p-0"
+	}, iaH("div", { className: "space-y-2 border-b border-sand/70 p-3" }, iaH(Input, {
+		value: q,
+		onChange: (e) => setQ(e.target.value),
+		placeholder: "Buscar cliente…"
+	}), iaH("div", { className: "flex flex-wrap gap-1" }, [
+		["todos", "Todos"],
+		["rojo", "Rojo"],
+		["amarillo", "Amarillo"],
+		["verde", "Verde"]
+	].map(([k, l]) => iaH("button", {
+		key: k,
+		onClick: () => setFilter(k),
+		className: cx("rounded-full px-2.5 py-0.5 text-xs font-medium ring-1 ring-inset", filter === k ? "bg-wine-600 text-white ring-wine-600" : "bg-paper text-ink/80 ring-sand hover:bg-cream")
+	}, l)))), iaH("div", {
+		className: "overflow-y-auto",
+		style: { maxHeight: 560 }
+	}, shown.map((r) => iaH("button", {
+		key: r.customerId,
+		onClick: () => setSel(r.customerId),
+		className: cx("flex w-full items-center gap-3 border-b border-sand/60 px-4 py-2.5 text-left hover:bg-cream/70", r.customerId === current && "bg-wine-50")
+	}, iaH("span", {
+		className: "size-2.5 shrink-0 rounded-full",
+		style: { background: IA_LEVEL[r.level].dot }
+	}), iaH("span", { className: "min-w-0 flex-1" }, iaH("span", { className: "block truncate text-[13.5px] font-medium" }, r.name), iaH("span", { className: "block truncate text-xs text-muted" }, r.top)), iaH("span", { className: cx("num text-sm font-semibold", IA_LEVEL[r.level].text) }, r.score))), !shown.length && iaH("div", { className: "p-6 text-center text-sm text-muted" }, "Sin clientes para este filtro"))), !h ? iaH(Card, null, det.error ? iaH(ErrorBox, { error: det.error }) : iaH(Spinner, {})) : iaH(Card, {
+		title: "Salud de la cuenta",
+		icon: iaH(Activity, { className: "size-4" }),
+		actions: iaH(LinkButton, {
+			to: `/clientes/${h.customerId}`,
+			size: "sm"
+		}, "Ver ficha")
+	}, iaH("div", { className: "flex flex-wrap items-start justify-between gap-4" }, iaH("div", { className: "min-w-0" }, iaH("h2", { className: "font-serif text-xl" }, h.name), iaH("p", { className: "text-xs text-muted" }, `AN8 ${h.an8} · ${h.channel} ${h.category} · ${h.zone} · ${h.sellerName}`), iaH("p", { className: "mt-1 text-xs text-muted" }, `Ventas 12 meses ${money(h.sales12m, "USD", 0)}`)), iaH("div", { className: "text-right" }, iaH("div", { className: cx("font-serif text-4xl font-semibold", IA_LEVEL[h.level].text), style: { lineHeight: 1 } }, h.score, iaH("span", { className: "text-base text-muted" }, " /100")), iaH(IaPill, {
+		tone: IA_LEVEL[h.level].tone,
+		className: "mt-1"
+	}, IA_LEVEL[h.level].label))), iaH("div", { className: "mt-3" }, iaH("div", { className: "mb-1 flex justify-between text-[11.5px] text-muted" }, iaH("span", null, "Facturación de los últimos 12 meses"), iaH("span", null, "JDE · F42119")), iaH(IaSpark, {
+		values: h.monthly.map((m) => m.amount),
+		color: IA_LEVEL[h.level].dot
+	})), iaH("h4", { className: "mt-4 text-[11.5px] font-semibold uppercase tracking-wide text-ink/70" }, h.reasons.length ? "3 motivos principales" : "Motivos"), h.reasons.length ? iaH("ol", { className: "mt-2 space-y-2" }, h.reasons.map((r) => iaH("li", {
+		key: r.key,
+		className: "flex items-start gap-3"
+	}, iaH(IaPill, {
+		tone: "wine",
+		className: "num"
+	}, `${r.weight} %`), iaH("div", { className: "min-w-0 text-[13px]" }, iaH("span", { className: "font-semibold" }, `${r.label}: `), r.text, iaH("div", { className: "text-[11.5px] text-muted" }, `Evidencia: ${r.evidence}`))))) : iaH("p", { className: "mt-2 text-sm text-muted" }, "Sin señales de riesgo: compra con su frecuencia habitual y sin deuda vencida."), h.factors.length > 3 && iaH("p", { className: "mt-2 text-[11.5px] text-muted" }, `Otras señales: ${h.factors.slice(3).map((f) => f.label.toLowerCase()).join(", ")}.`), iaH(Callout, {
+		tone: h.level === "rojo" ? "red" : h.level === "amarillo" ? "amber" : "green",
+		icon: iaH(Lightbulb, { className: "size-4" }),
+		title: "Acción sugerida",
+		className: "mt-4"
+	}, h.action), h.alertedAt && iaH("p", { className: "mt-2 text-xs text-teal-700" }, `Alerta enviada al vendedor y al supervisor ${relative(h.alertedAt)}.`), iaH("div", { className: "mt-4 flex flex-wrap items-center gap-2" }, iaH(Button, {
+		variant: "primary",
+		size: "sm",
+		loading: busy === "alert",
+		icon: iaH(Mail, { className: "size-4" }),
+		onClick: () => act("alert")
+	}, "Avisar al vendedor y al supervisor"), iaH(Button, {
+		size: "sm",
+		loading: busy === "visit",
+		icon: iaH(CalendarPlus, { className: "size-4" }),
+		onClick: () => act("visit")
+	}, "Agendar visita de retención"), iaH(Select, {
+		value: "",
+		className: "h-8 w-auto py-1 text-[13px]",
+		onChange: (e) => e.target.value && act(e.target.value)
+	}, iaH("option", { value: "" }, "No aplica…"), [
+		"Cierre por temporada",
+		"Cambio de dueño acordado",
+		"Compra por distribuidor",
+		"Dato incorrecto"
+	].map((x) => iaH("option", {
+		key: x,
+		value: x
+	}, x)))), iaH(IaEngineNote, null, "Puntaje 0–100 calculado cada noche: frecuencia y ticket frente a su propio historial, deuda y retenciones de JDE, mix de líneas, reclamos, contacto y señales de las conversaciones. Lo que marca el vendedor (“No aplica”) ajusta el modelo."))));
+}
+// ───────────── Caso 2 · Next Best Action ─────────────
+function IaNba({ preselect }) {
+	const { epoch } = useSession();
+	const toast = useToast();
+	const nav = useNavigate();
+	const [sel, setSel] = iaR.useState(preselect ?? "");
+	const [k, setK] = iaR.useState(0);
+	const list = useApi("/api/ia/nba", [epoch]);
+	const current = sel || list.data?.rows[0]?.customerId || "";
+	const det = useApi(current ? `/api/ia/nba?customerId=${current}` : null, [
+		epoch,
+		current,
+		k
+	]);
+	async function feedback(s, action, reason) {
+		try {
+			await api.post("/api/ia/feedback", {
+				kind: "nba",
+				action,
+				customerId: current,
+				sku: s.sku,
+				reason
+			});
+			if (action === "aceptada") nav(`/presupuestos/nuevo?cliente=${current}&texto=${encodeURIComponent(`${s.cases} cajas ${s.product}`)}`);
+			else {
+				toast(`Descartada: ${reason}. Las próximas sugerencias lo tienen en cuenta.`, "info");
+				setK(k + 1);
+			}
+		} catch (e) {
+			toast(e.message, "error");
+		}
+	}
+	if (list.error) return iaH(ErrorBox, { error: list.error });
+	if (!list.data) return iaH(Spinner, {});
+	const d = det.data;
+	return iaH("div", { className: "grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]" }, iaH(Card, {
+		title: "Mejores oportunidades",
+		subtitle: `Top de ${list.data.customers} clientes activos de la cartera`,
+		bodyClass: "p-0"
+	}, iaH("div", {
+		className: "overflow-y-auto",
+		style: { maxHeight: 640 }
+	}, list.data.rows.map((r) => iaH("button", {
+		key: r.customerId,
+		onClick: () => setSel(r.customerId),
+		className: cx("block w-full border-b border-sand/60 px-4 py-2.5 text-left hover:bg-cream/70", r.customerId === current && "bg-wine-50")
+	}, iaH("span", { className: "flex items-center justify-between gap-2" }, iaH("span", { className: "truncate text-[13.5px] font-medium" }, r.name), iaH("span", { className: "num text-sm font-semibold text-teal-700" }, `${r.probability} %`)), iaH("span", { className: "mt-0.5 flex items-center gap-1.5 text-xs text-muted" }, iaH(IaPill, { tone: IA_TYPE_TONE[r.type] }, r.type), iaH("span", { className: "truncate" }, r.product)))))), iaH("div", { className: "min-w-0 space-y-3" }, !d ? iaH(Card, null, det.error ? iaH(ErrorBox, { error: det.error }) : iaH(Spinner, {})) : iaH(IaFrag, null, iaH(Card, {
+		title: "Qué ofrecerle ahora",
+		icon: iaH(Target, { className: "size-4" }),
+		subtitle: `${d.customer.name} · AN8 ${d.customer.an8} · ${d.customer.channel} ${d.customer.category} · compra ${d.customer.lines6m.join(", ") || "—"}${d.customer.mixBreaks.length ? ` · dejó ${d.customer.mixBreaks.join(", ")}` : ""}`,
+		actions: iaH(IaFrag, null, iaH(IaPill, { tone: "violet" }, "Sugerido por IA"), iaH(LinkButton, {
+			to: `/clientes/${d.customer.id}`,
+			size: "sm"
+		}, "Ver ficha"))
+	}, !d.suggestions.length ? iaH(Empty, { title: "Sin sugerencias con stock disponible para este cliente" }) : iaH("div", { className: "grid gap-3 md:grid-cols-2" }, d.suggestions.map((s) => iaH("div", {
+		key: s.sku,
+		className: "flex flex-col gap-2 rounded-xl border border-sand bg-white p-4",
+		style: { borderTop: `4px solid ${s.type === "Up-sell" ? "#2d6a70" : s.type === "Estacional" ? "#e0a100" : "#8a2b3a"}` }
+	}, iaH("div", { className: "flex items-center justify-between" }, iaH(IaPill, { tone: IA_TYPE_TONE[s.type] }, s.type), iaH("span", { className: "text-xs text-muted" }, `Línea ${s.line}`)), iaH("div", { className: "text-[15px] font-semibold leading-tight" }, s.product), iaH("div", { className: "text-xs text-muted" }, `Sugerido: ${s.cases} cajas × ${s.unitsPerCase} · ${money(s.value, "USD", 0)} de lista${s.promo ? ` · ${s.promo}` : ""}`), iaH("p", { className: "text-[13px] text-ink/85" }, s.argument), iaH("div", null, iaH("div", { className: "mb-1 flex justify-between text-xs" }, iaH("span", { className: "text-muted" }, "Probabilidad de aceptación"), iaH("span", { className: "num font-semibold text-teal-700" }, `${s.probability} %`)), iaH(Progress, {
+		value: s.probability,
+		tone: "teal"
+	})), iaH("div", { className: "text-xs text-muted" }, `Stock disponible: ${s.stock.toLocaleString("es-AR")} u. en ${s.branch} · comparado con ${s.peers} ${s.peerLabel}`), iaH("div", { className: "flex flex-wrap gap-2 pt-1", style: { marginTop: "auto" } }, iaH(Button, {
+		variant: "primary",
+		size: "sm",
+		icon: iaH(Plus, { className: "size-4" }),
+		onClick: () => feedback(s, "aceptada")
+	}, "Al presupuesto"), iaH(Select, {
+		value: "",
+		className: "h-8 w-auto py-1 text-[13px]",
+		onChange: (e) => e.target.value && feedback(s, "descartada", e.target.value)
+	}, iaH("option", { value: "" }, "Descartar…"), [
+		"Precio",
+		"Ya lo compra a otro",
+		"Sin espacio en góndola o carta",
+		"No es para este cliente"
+	].map((x) => iaH("option", {
+		key: x,
+		value: x
+	}, x)))))))), iaH(IaEngineNote, null, "Compara al cliente con sus pares (mismo canal y categoría) y cruza con el stock por sucursal, las promociones vigentes de JDE y la estacionalidad. “Al presupuesto” abre un presupuesto nuevo con la línea cargada; el precio final lo pone JDE."))));
+}
+// ───────────── Caso 3 · Asistente de interacciones ─────────────
+function IaAnalysisView({ a, item, customerId, onTasks }) {
+	const toast = useToast();
+	const [checked, setChecked] = iaR.useState({});
+	const [busy, setBusy] = iaR.useState(false);
+	const [raw, setRaw] = iaR.useState(false);
+	iaR.useEffect(() => {
+		setChecked(Object.fromEntries(a.commitments.map((_, i) => [i, true])));
+		setRaw(false);
+	}, [a]);
+	const chosen = a.commitments.filter((_, i) => checked[i]);
+	const sentTone = (l) => l === "positivo" ? "green" : l === "negativo" ? "red" : "neutral";
+	async function create() {
+		setBusy(true);
+		try {
+			const r = await api.post("/api/ia/interactions/tasks", {
+				customerId,
+				sourceId: item?.id,
+				items: chosen
+			});
+			toast(`${r.created} tarea${r.created === 1 ? "" : "s"} en la agenda`);
+			onTasks?.();
+		} catch (e) {
+			toast(e.message, "error");
+		} finally {
+			setBusy(false);
+		}
+	}
+	return iaH("div", { className: "space-y-4" }, iaH("div", { className: "flex flex-wrap items-start justify-between gap-2" }, iaH("div", null, iaH("div", { className: "text-[15px] font-semibold" }, item?.title ?? "Texto analizado"), item && iaH("div", { className: "text-xs text-muted" }, `${dateTime(item.at)}${item.durationMin ? ` · ${item.durationMin} min` : ""} · ${item.source}`)), iaH(IaPill, { tone: sentTone(a.sentiment.end) }, a.sentiment.start === a.sentiment.end ? `Sentimiento: ${a.sentiment.end}` : `Sentimiento: ${a.sentiment.start} → ${a.sentiment.end}`)), iaH("div", null, iaH("h4", { className: "flex items-center gap-1.5 text-[11.5px] font-semibold uppercase tracking-wide text-ink/70" }, iaH(Sparkles, { className: "size-3.5" }), "Resumen"), a.summary.length ? iaH("ul", { className: "mt-1.5 space-y-1 text-[13.5px]" }, a.summary.map((s, i) => iaH("li", {
+		key: i,
+		className: "flex gap-2"
+	}, iaH("span", { className: "text-wine-600" }, "•"), iaH("span", null, s.speaker && iaH("span", { className: "font-medium" }, `${s.speaker}: `), s.text)))) : iaH("p", { className: "mt-1 text-sm text-muted" }, "Sin contenido comercial para resumir.")), iaH("div", null, iaH("h4", { className: "text-[11.5px] font-semibold uppercase tracking-wide text-ink/70" }, "Compromisos y próximos pasos"), a.commitments.length ? iaH("div", { className: "mt-1.5 space-y-1.5" }, a.commitments.map((cm, i) => iaH("label", {
+		key: i,
+		className: "flex cursor-pointer items-start gap-2.5 rounded-lg border border-sand/70 bg-white px-3 py-2 text-[13px]"
+	}, iaH("input", {
+		type: "checkbox",
+		checked: !!checked[i],
+		onChange: (e) => setChecked({
+			...checked,
+			[i]: e.target.checked
+		}),
+		className: "mt-0.5"
+	}), iaH("span", { className: "min-w-0 flex-1" }, iaH("span", { className: "font-semibold" }, `${cm.who} · `), cm.what), iaH(IaPill, { tone: cm.role === "cliente" ? "neutral" : "wine" }, dateShort(cm.due))))) : iaH("p", { className: "mt-1 text-sm text-muted" }, "No se detectaron compromisos.")), a.topics.length > 0 && iaH("div", null, iaH("h4", { className: "text-[11.5px] font-semibold uppercase tracking-wide text-ink/70" }, "Temas detectados"), iaH("div", { className: "mt-1.5 flex flex-wrap gap-1.5" }, a.topics.map((t) => iaH(IaPill, {
+		key: t.label,
+		tone: t.tone
+	}, t.label)))), a.signals.length > 0 && iaH("div", { className: "space-y-1.5" }, a.signals.map((s, i) => iaH(Callout, {
+		key: i,
+		tone: s.case === "salud" ? "red" : s.case === "precio" ? "amber" : "teal",
+		icon: s.case === "salud" ? iaH(Activity, { className: "size-4" }) : s.case === "precio" ? iaH(Percent, { className: "size-4" }) : iaH(FileText, { className: "size-4" })
+	}, iaH("span", null, s.text, " ", s.case === "presupuesto" && customerId && iaH(Link, {
+		to: `/presupuestos/nuevo?cliente=${customerId}&texto=${encodeURIComponent(s.texto)}`,
+		className: "font-medium text-wine-700 underline"
+	}, "Armar presupuesto"))))), iaH("div", { className: "flex flex-wrap items-center gap-2 border-t border-sand/70 pt-3" }, customerId && a.commitments.length > 0 && iaH(Button, {
+		variant: "primary",
+		size: "sm",
+		loading: busy,
+		disabled: !chosen.length,
+		icon: iaH(CalendarPlus, { className: "size-4" }),
+		onClick: create
+	}, `Crear ${chosen.length} tarea${chosen.length === 1 ? "" : "s"} en la agenda`), item?.tasksCreated > 0 && iaH("span", { className: "text-xs text-teal-700" }, `Ya se crearon ${item.tasksCreated} tarea(s) desde esta conversación`), item && iaH(Button, {
+		size: "sm",
+		variant: "ghost",
+		onClick: () => setRaw(!raw)
+	}, raw ? "Ocultar texto original" : "Ver texto original")), raw && item && iaH("pre", { className: "whitespace-pre-wrap rounded-lg border border-sand bg-cream/60 p-3 text-[12.5px] text-ink/85" }, item.text), iaH(IaEngineNote, null, a.engine));
+}
+function IaInteractions({ preselect }) {
+	const { epoch } = useSession();
+	const toast = useToast();
+	const [sel, setSel] = iaR.useState(preselect ?? "");
+	const [item, setItem] = iaR.useState("");
+	const [text, setText] = iaR.useState("");
+	const [free, setFree] = iaR.useState(null);
+	const [busy, setBusy] = iaR.useState(false);
+	const list = useApi("/api/ia/interactions", [epoch]);
+	const current = sel || list.data?.customers[0]?.id || "";
+	const det = useApi(current ? `/api/ia/interactions?customerId=${current}` : null, [epoch, current]);
+	const items = det.data?.items ?? [];
+	const it = items.find((x) => x.id === item) ?? items[0];
+	async function analyze() {
+		setBusy(true);
+		try {
+			setFree(await api.post("/api/ia/interactions/analyze", {
+				text,
+				customerId: current
+			}));
+		} catch (e) {
+			toast(e.message, "error");
+		} finally {
+			setBusy(false);
+		}
+	}
+	if (list.error) return iaH(ErrorBox, { error: list.error });
+	if (!list.data) return iaH(Spinner, {});
+	const kindIcon = (k) => k === "Llamada" ? iaH(Phone$1, { className: "size-3.5" }) : k === "Correo" ? iaH(Mail, { className: "size-3.5" }) : k === "WhatsApp" ? iaH(MessageCircle, { className: "size-3.5" }) : iaH(FileText, { className: "size-3.5" });
+	return iaH("div", { className: "space-y-4" }, iaH("div", { className: "flex flex-wrap items-center gap-2" }, iaH(IaCustomerSelect, {
+		value: current,
+		onChange: (v) => {
+			setSel(v);
+			setItem("");
+			setFree(null);
+		},
+		options: list.data.customers.map((c) => ({
+			id: c.id,
+			label: `${c.name}${c.transcripts ? ` · ${c.transcripts} transcripta${c.transcripts === 1 ? "" : "s"}` : ""}`
+		}))
+	}), det.data && iaH(LinkButton, {
+		to: `/clientes/${current}`,
+		size: "sm"
+	}, "Ver ficha")), iaH("div", { className: "grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]" }, iaH(Card, {
+		title: `Interacciones · ${items.length}`,
+		bodyClass: "p-0"
+	}, !det.data ? iaH(Spinner, {}) : iaH("div", {
+		className: "overflow-y-auto",
+		style: { maxHeight: 620 }
+	}, items.map((x) => iaH("button", {
+		key: x.id,
+		onClick: () => {
+			setItem(x.id);
+			setFree(null);
+		},
+		className: cx("block w-full border-b border-sand/60 px-4 py-2.5 text-left hover:bg-cream/70", !free && it?.id === x.id && "bg-wine-50")
+	}, iaH("span", { className: "flex items-center gap-1.5 text-[13px] font-medium" }, kindIcon(x.kind), iaH("span", { className: "truncate" }, x.title)), iaH("span", { className: "block text-xs text-muted" }, `${dateTime(x.at)} · ${x.who ?? ""}`), iaH("span", { className: "mt-1 flex flex-wrap gap-1" }, x.transcript && iaH(IaPill, { tone: "violet" }, "Transcripta"), iaH(IaPill, { tone: "teal" }, x.analysis.headline)))))), iaH("div", { className: "min-w-0 space-y-4" }, iaH(Card, {
+		title: free ? "Análisis del texto pegado" : "Resumen de la interacción",
+		icon: iaH(Sparkles, { className: "size-4" }),
+		actions: free && iaH(Button, {
+			size: "sm",
+			variant: "ghost",
+			onClick: () => setFree(null)
+		}, "Volver a la interacción")
+	}, free ? iaH(IaAnalysisView, {
+		a: free,
+		customerId: current,
+		onTasks: det.reload
+	}) : it ? iaH(IaAnalysisView, {
+		a: it.analysis,
+		item: it,
+		customerId: current,
+		onTasks: det.reload
+	}) : iaH(Empty, { title: "Sin interacciones registradas" })), iaH(Card, {
+		title: "Analizar un correo, nota o transcripción",
+		subtitle: "Pegue el texto: el asistente lo resume y detecta compromisos, temas y sentimiento"
+	}, iaH(Textarea, {
+		value: text,
+		onChange: (e) => setText(e.target.value),
+		rows: 5,
+		placeholder: "Ej.: Hola Juan, necesito 10 cajas de Santa Julia Malbec antes del viernes. Otra bodega me ofreció 12 % de descuento…"
+	}), iaH("div", { className: "mt-2 flex justify-end" }, iaH(Button, {
+		variant: "teal",
+		size: "sm",
+		loading: busy,
+		disabled: text.trim().length < 10,
+		icon: iaH(WandSparkles, { className: "size-4" }),
+		onClick: analyze
+	}, "Analizar"))))));
+}
+// ───────────── Caso 4 · Precio y descuento recomendado ─────────────
+function IaPriceChart({ s, trial }) {
+	const W = 640, H = 250, L = 46, R = 40, T = 22, B = 34;
+	const maxD = s.curve[s.curve.length - 1].d || 1;
+	const X = (d) => L + d / maxD * (W - L - R);
+	const Y = (p) => T + (1 - p / 100) * (H - T - B);
+	const path = (k) => s.curve.map((c, i) => `${i ? "L" : "M"}${X(c.d).toFixed(1)},${Y(c[k]).toFixed(1)}`).join(" ");
+	const ticksX = [];
+	for (let d = 0; d <= maxD; d += maxD > 12 ? 4 : 2) ticksX.push(d);
+	const mark = (pt, color, label, filled) => iaH("g", { key: label }, iaH("line", {
+		x1: X(pt.d),
+		x2: X(pt.d),
+		y1: Y(pt.p),
+		y2: Y(pt.marginPct),
+		stroke: color,
+		strokeDasharray: "3 3"
+	}), iaH("circle", {
+		cx: X(pt.d),
+		cy: Y(pt.p),
+		r: 5,
+		fill: filled ? "#2d6a70" : "#fff",
+		stroke: "#2d6a70",
+		strokeWidth: 2
+	}), iaH("circle", {
+		cx: X(pt.d),
+		cy: Y(pt.marginPct),
+		r: 5,
+		fill: filled ? "#8a2b3a" : "#fff",
+		stroke: "#8a2b3a",
+		strokeWidth: 2
+	}), iaH("text", {
+		x: X(pt.d),
+		y: H - B + 26,
+		fontSize: 11,
+		fill: color,
+		textAnchor: X(pt.d) > W - 90 ? "end" : X(pt.d) < L + 50 ? "start" : "middle",
+		fontWeight: 600
+	}, label));
+	return iaH("svg", {
+		viewBox: `0 0 ${W} ${H}`,
+		width: "100%",
+		style: {
+			display: "block",
+			fontFamily: "inherit"
+		}
+	}, iaH("rect", {
+		x: X(s.recommended.from),
+		y: T,
+		width: Math.max(4, X(s.recommended.to) - X(s.recommended.from)),
+		height: H - T - B,
+		fill: "#e3f1f1"
+	}), iaH("text", {
+		x: (X(s.recommended.from) + X(s.recommended.to)) / 2,
+		y: T - 7,
+		fontSize: 11,
+		fill: "#23555a",
+		textAnchor: "middle",
+		fontWeight: 600
+	}, `sugerido ${iaD(s.atRecommended.d)}`), [
+		0,
+		20,
+		40,
+		60,
+		80,
+		100
+	].map((p) => iaH("g", { key: p }, iaH("line", {
+		x1: L,
+		x2: W - R,
+		y1: Y(p),
+		y2: Y(p),
+		stroke: p ? "#f1ebe3" : "#d9cfc2"
+	}), iaH("text", {
+		x: L - 6,
+		y: Y(p) + 4,
+		fontSize: 10.5,
+		fill: "#6b6470",
+		textAnchor: "end"
+	}, `${p} %`))), ticksX.map((d) => iaH("text", {
+		key: d,
+		x: X(d),
+		y: H - B + 13,
+		fontSize: 10.5,
+		fill: "#6b6470",
+		textAnchor: "middle"
+	}, `${d} %`)), iaH("path", {
+		d: path("p"),
+		fill: "none",
+		stroke: "#2d6a70",
+		strokeWidth: 2.5
+	}), iaH("path", {
+		d: path("marginPct"),
+		fill: "none",
+		stroke: "#8a2b3a",
+		strokeWidth: 2.5
+	}), iaH("text", {
+		x: X(maxD * .55),
+		y: Y(s.curve[Math.round(s.curve.length * .55)].p) - 8,
+		fontSize: 11.5,
+		fill: "#23555a",
+		fontWeight: 600
+	}, "Probabilidad de cierre"), iaH("text", {
+		x: X(maxD),
+		y: Y(s.curve[s.curve.length - 1].marginPct) + 18,
+		fontSize: 11.5,
+		fill: "#8a2b3a",
+		fontWeight: 600,
+		textAnchor: "end"
+	}, "Margen bruto"), mark(s.atRecommended, "#23555a", "", true), Math.abs(s.atCurrent.d - s.atRecommended.d) >= 1 && mark(s.atCurrent, "#a3263a", `cargado ${iaD(s.atCurrent.d)}`, false), trial && Math.abs(trial.d - s.atCurrent.d) >= .5 && Math.abs(trial.d - s.atRecommended.d) >= .5 && mark(trial, "#6b6470", Math.abs(trial.d - s.atCurrent.d) >= 3 ? `prueba ${iaD(trial.d)}` : "", false));
+}
+function IaPricing({ preselect }) {
+	const { epoch } = useSession();
+	const toast = useToast();
+	const [sel, setSel] = iaR.useState(preselect ?? "");
+	const [trialD, setTrialD] = iaR.useState(null);
+	const { data, error, reload } = useApi(`/api/ia/pricing${sel ? `?quoteId=${sel}` : ""}`, [epoch, sel]);
+	iaR.useEffect(() => setTrialD(null), [sel]);
+	if (error) return iaH(ErrorBox, { error });
+	if (!data) return iaH(Spinner, {});
+	const s = data.selected;
+	if (!s) return iaH(Empty, { title: "No hay presupuestos en su cartera" });
+	const pointAt = (d) => {
+		const c = s.curve.reduce((a, b) => Math.abs(b.d - d) < Math.abs(a.d - d) ? b : a, s.curve[0]);
+		return c;
+	};
+	const trial = trialD === null ? null : pointAt(trialD);
+	const cur = s.atCurrent, rec = s.atRecommended;
+	const diffUSD = Math.round(rec.marginUSD - cur.marginUSD);
+	async function decide(d) {
+		try {
+			const r = await api.post("/api/ia/pricing/decision", {
+				quoteId: s.quote.id,
+				discount: d,
+				recommended: rec.d
+			});
+			toast(r.followed ? `Registrado: ${iaD(d)} (dentro de lo recomendado)` : `Registrado: ${iaD(d)}. Queda para medir el resultado.`);
+			reload();
+		} catch (e) {
+			toast(e.message, "error");
+		}
+	}
+	const tile = (title, pt, tone) => iaH("div", { className: cx("rounded-lg border px-3 py-2", tone === "teal" ? "border-teal-100 bg-teal-50" : tone === "red" ? "border-red-200 bg-red-50" : "border-sand bg-cream/60") }, iaH("div", { className: cx("text-xs font-semibold", tone === "teal" ? "text-teal-700" : tone === "red" ? "text-red-700" : "text-ink/70") }, title), iaH("div", { className: "num text-[13.5px]" }, "Cierre ", iaH("b", null, `${iaPct1(pt.p)}`), " · margen ", iaH("b", null, `${iaPct1(pt.marginPct)}`), ` · ${money(pt.marginUSD, "USD", 0)}`));
+	return iaH("div", { className: "grid gap-4 lg:grid-cols-[320px_minmax(0,1fr)]" }, iaH(Card, {
+		title: "Presupuestos",
+		bodyClass: "p-0"
+	}, iaH("div", {
+		className: "overflow-y-auto",
+		style: { maxHeight: 640 }
+	}, data.quotes.map((q) => iaH("button", {
+		key: q.id,
+		onClick: () => setSel(q.id),
+		className: cx("block w-full border-b border-sand/60 px-4 py-2.5 text-left hover:bg-cream/70", q.id === s.quote.id && "bg-wine-50")
+	}, iaH("span", { className: "flex items-center justify-between gap-2" }, iaH("span", { className: "text-[13.5px] font-medium" }, q.id), iaH(IaPill, null, q.status)), iaH("span", { className: "block truncate text-xs text-muted" }, `${q.customer} · ${money(q.total, q.currency, 0)} · ${q.lines} línea${q.lines === 1 ? "" : "s"}`))))), iaH(Card, {
+		title: "Descuento recomendado",
+		icon: iaH(Percent, { className: "size-4" }),
+		subtitle: `${s.quote.id} v${s.quote.version} · ${s.customer?.name ?? ""} · línea principal ${s.line} · lista ${money(s.listUSD, "USD", 0)}`,
+		actions: iaH(LinkButton, {
+			to: `/presupuestos/${s.quote.id}`,
+			size: "sm"
+		}, "Abrir presupuesto")
+	}, iaH("div", { className: "flex flex-wrap items-end justify-between gap-3" }, iaH("div", null, iaH("div", { className: "font-serif text-3xl font-semibold text-teal-700" }, s.recommended.from === s.recommended.to ? `${iaD(s.recommended.d)}` : `${iaD(s.recommended.from)} – ${iaD(s.recommended.to)}`), iaH("div", { className: "text-xs text-muted" }, `Máximo de la política ${s.policyMax} % · el vendedor autoriza hasta ${s.sellerMax} %`)), iaH(IaPill, { tone: "violet" }, `Basado en ${s.basis.n} propuestas similares · ${s.basis.segment}`)), s.basis.competitor && iaH(Callout, {
+		tone: "amber",
+		icon: iaH(TriangleAlert, { className: "size-4" }),
+		className: "mt-3"
+	}, `Competidor mencionado${s.basis.competitor.pct ? ` con ${s.basis.competitor.pct} %` : ""} en “${s.basis.competitor.title}” (${dateShort(s.basis.competitor.at)}): la curva usa solo negociaciones con competidor.`), iaH("div", { className: "mt-3" }, iaH(IaPriceChart, {
+		s,
+		trial
+	})), iaH("div", { className: "mt-2 flex items-center gap-3" }, iaH("span", { className: "shrink-0 text-xs text-muted" }, "Probar otro descuento"), iaH("input", {
+		type: "range",
+		min: 0,
+		max: s.curve[s.curve.length - 1].d,
+		step: .5,
+		value: trialD ?? cur.d,
+		onChange: (e) => setTrialD(Number(e.target.value)),
+		className: "w-full",
+		style: { accentColor: "#8a2b3a" }
+	}), iaH("span", { className: "num w-14 shrink-0 text-right text-sm font-semibold" }, `${iaD(trialD ?? cur.d)}`)), iaH("div", { className: "mt-3 grid gap-2 sm:grid-cols-3" }, tile(`Con ${iaD(rec.d)} (sugerido)`, rec, "teal"), tile(`Con ${iaD(cur.d)} (cargado)`, cur, Math.abs(cur.d - rec.d) >= 1 ? "red" : "neutral"), trial ? tile(`Con ${iaD(trial.d)} (prueba)`, trial, "neutral") : iaH("div", { className: "rounded-lg border border-dashed border-sand px-3 py-2 text-xs text-muted" }, "Mueva el control para simular otro descuento.")), iaH("p", { className: "mt-3 text-[13px] text-ink/80" }, Math.abs(cur.d - rec.d) < 1 ? "El descuento cargado ya está dentro del rango recomendado." : cur.d > rec.d ? `Bajando de ${iaD(cur.d)} a ${iaD(rec.d)} la probabilidad de cierre cambia ${iaPts(cur.p - rec.p)} y se cuidan ${money(diffUSD, "USD", 0)} de margen.` : `Subiendo de ${iaD(cur.d)} a ${iaD(rec.d)} la probabilidad de cierre gana ${iaPts(rec.p - cur.p)} y el margen esperado mejora.`), iaH("div", { className: "mt-3 flex flex-wrap gap-2" }, iaH(Button, {
+		variant: "primary",
+		size: "sm",
+		icon: iaH(Check, { className: "size-4" }),
+		onClick: () => decide(rec.d)
+	}, `Aplicar ${iaD(rec.d)}`), Math.abs(cur.d - rec.d) >= 1 && iaH(Button, {
+		size: "sm",
+		onClick: () => decide(cur.d)
+	}, `Mantener ${iaD(cur.d)}`)), s.decisions.length > 0 && iaH("p", { className: "mt-2 text-xs text-teal-700" }, `Última decisión: ${iaD(s.decisions[0].discount)} por ${s.decisions[0].userName} ${relative(s.decisions[0].at)}${s.decisions[0].followed ? " (siguió la recomendación)" : ""}.`), iaH(IaEngineNote, null, "Curva de cierre ajustada con el historial de propuestas ganadas y perdidas del mismo segmento (en la maqueta, un historial simulado de 24 meses). El rango maximiza el margen esperado: probabilidad de cierre × margen. El precio final lo sigue poniendo JDE y lo que supera el máximo pasa por la autorización comercial.")));
+}
+var iaD = (d) => `${Number(d).toLocaleString("es-AR", { maximumFractionDigits: 1 })} %`;
+var iaPct1 = (n) => `${n.toLocaleString("es-AR", { maximumFractionDigits: 1 })} %`;
+var iaPts = (n) => `${Math.abs(n).toLocaleString("es-AR", { maximumFractionDigits: 1 })} puntos`;
+// ───────────── Caso 5 · Calidad de datos ─────────────
+function IaQuality() {
+	const { epoch } = useSession();
+	const toast = useToast();
+	const [busy, setBusy] = iaR.useState("");
+	const { data, error, reload } = useApi("/api/ia/quality", [epoch]);
+	async function run(key, url, body, ok) {
+		setBusy(key);
+		try {
+			const r = await api.post(url, body);
+			toast(ok(r));
+			reload();
+		} catch (e) {
+			toast(e.message, "error");
+		} finally {
+			setBusy("");
+		}
+	}
+	if (error) return iaH(ErrorBox, { error });
+	if (!data) return iaH(Spinner, {});
+	const s = data.summary;
+	const confTone = (n) => n >= 95 ? "green" : n >= 85 ? "amber" : "red";
+	const kindTone = {
+		Normalizar: "teal",
+		Autocompletar: "violet",
+		Revisar: "amber"
+	};
+	const matchTone = {
+		igual: "green",
+		parecido: "amber",
+		distinto: "neutral"
+	};
+	return iaH("div", { className: "space-y-4" }, iaH("div", { className: "grid gap-3 sm:grid-cols-2 lg:grid-cols-4" }, iaH(Stat, {
+		label: "Confianza promedio",
+		value: `${s.avgConfidence} %`,
+		tone: "teal",
+		sub: `${s.above90} de ${s.records} registros sobre 90 %`
+	}), iaH(Stat, {
+		label: "Posibles duplicados",
+		value: s.duplicates,
+		tone: s.duplicates ? "red" : "green",
+		sub: `${s.leads} prospectos revisados`
+	}), iaH(Stat, {
+		label: "Datos a normalizar",
+		value: s.toNormalize,
+		tone: "amber",
+		sub: `${s.toComplete} para autocompletar · ${s.toReview} a revisar`
+	}), iaH(Stat, {
+		label: "Correcciones aplicadas",
+		value: s.applied,
+		sub: "en esta sesión, con registro en auditoría"
+	})), iaH(Card, {
+		title: "Posibles duplicados",
+		icon: iaH(Users, { className: "size-4" }),
+		subtitle: "Prospectos del CRM que coinciden con clientes de JDE: el registro que manda es el AN8"
+	}, !data.duplicates.length ? iaH(Empty, { title: "Sin duplicados pendientes" }) : iaH("div", { className: "space-y-3" }, data.duplicates.map((d) => iaH("div", {
+		key: d.id,
+		className: "rounded-xl border border-sand bg-white p-3"
+	}, iaH("div", { className: "flex flex-wrap items-center justify-between gap-2" }, iaH("div", { className: "flex flex-wrap gap-1.5" }, d.matches.map((m) => iaH(IaPill, {
+		key: m.field,
+		tone: matchTone[m.kind]
+	}, `${m.field} ${m.kind}${m.pct && m.kind !== "igual" ? ` ${m.pct} %` : ""}`))), iaH(IaPill, { tone: d.score >= 80 ? "red" : "amber" }, `Coincidencia ${d.score} %`)), iaH("div", { className: "mt-2 grid gap-2 md:grid-cols-2" }, [d.a, d.b].map((x, i) => iaH("div", {
+		key: i,
+		className: cx("rounded-lg border px-3 py-2", i === 0 ? "border-teal-100 bg-teal-50/50" : "border-sand")
+	}, iaH("div", { className: "flex flex-wrap items-center gap-1.5 text-[13.5px] font-semibold" }, x.name, iaH(IaPill, { tone: i === 0 ? "teal" : "neutral" }, i === 0 ? `JDE · AN8 ${x.an8}` : x.kind)), iaH("div", { className: "text-xs text-muted" }, x.detail)))), iaH("div", { className: "mt-2 flex flex-wrap justify-end gap-2" }, iaH(Button, {
+		variant: "primary",
+		size: "sm",
+		loading: busy === d.id,
+		onClick: () => run(d.id, "/api/ia/quality/merge", {
+			leadId: d.b.id,
+			customerId: d.a.id
+		}, () => `Fusionado en AN8 ${d.a.an8}: el prospecto queda vinculado al cliente`)
+	}, `Fusionar en AN8 ${d.a.an8}`), iaH(Button, {
+		size: "sm",
+		onClick: () => run(`x${d.id}`, "/api/ia/quality/dismiss", { id: d.id }, () => "Marcado como distinto: no se vuelve a proponer")
+	}, "No es duplicado")))))), iaH(Card, {
+		title: "Normalización y autocompletado",
+		icon: iaH(WandSparkles, { className: "size-4" }),
+		subtitle: "Solo datos propios del CRM se corrigen acá; los datos de JDE van por el circuito de cambios de cliente",
+		actions: iaH(Button, {
+			size: "sm",
+			variant: "teal",
+			loading: busy === "all",
+			onClick: () => run("all", "/api/ia/quality/apply", {
+				all: true,
+				minConfidence: 95
+			}, (r) => `${r.applied} corrección(es) aplicadas`)
+		}, "Aplicar todo lo de confianza ≥ 95 %"),
+		bodyClass: "p-0"
+	}, iaH(Table, {
+		rowKey: (f) => f.id,
+		maxHeight: 460,
+		dense: true,
+		rows: data.fixes,
+		empty: "Sin datos para corregir",
+		columns: [
+			{
+				key: "c",
+				header: "Cliente",
+				render: (f) => iaH(Link, {
+					to: `/clientes/${f.customerId}`,
+					className: "font-medium hover:text-wine-600"
+				}, f.name)
+			},
+			{
+				key: "f",
+				header: "Dato",
+				render: (f) => f.field
+			},
+			{
+				key: "ch",
+				header: "Cambio sugerido",
+				render: (f) => iaH("span", { className: "text-[13px]" }, iaH("span", { className: "text-muted" }, f.from), " → ", iaH("b", null, f.to), f.note && iaH("span", { className: "block text-[11.5px] text-muted" }, f.note))
+			},
+			{
+				key: "k",
+				header: "Tipo",
+				render: (f) => iaH(IaPill, { tone: kindTone[f.kind] }, f.kind)
+			},
+			{
+				key: "conf",
+				header: "Confianza",
+				align: "right",
+				sort: (f) => f.confidence,
+				render: (f) => iaH(IaPill, { tone: confTone(f.confidence) }, `${f.confidence} %`)
+			},
+			{
+				key: "a",
+				header: "",
+				align: "right",
+				render: (f) => f.owner === "JDE" ? iaH(JdeTag, { label: "Circuito JDE", className: "whitespace-nowrap" }) : iaH(Button, {
+					size: "sm",
+					variant: f.confidence >= 90 ? "secondary" : "ghost",
+					loading: busy === f.id,
+					onClick: () => run(f.id, "/api/ia/quality/apply", { id: f.id }, () => `${f.field}: ${f.to}`)
+				}, f.confidence >= 90 ? "Aplicar" : "Revisar y aplicar")
+			}
+		]
+	})), iaH("div", { className: "grid gap-4 lg:grid-cols-2" }, iaH(Card, {
+		title: "Registros con menor confianza",
+		bodyClass: "p-0"
+	}, iaH(Table, {
+		rowKey: (r) => r.id,
+		dense: true,
+		rows: data.lowest,
+		columns: [
+			{
+				key: "n",
+				header: "Cliente",
+				render: (r) => iaH(Link, {
+					to: `/clientes/${r.id}`,
+					className: "font-medium hover:text-wine-600"
+				}, r.name)
+			},
+			{
+				key: "i",
+				header: "Observaciones",
+				align: "right",
+				render: (r) => r.issues
+			},
+			{
+				key: "c",
+				header: "Confianza",
+				align: "right",
+				render: (r) => iaH(IaPill, { tone: confTone(r.confidence) }, `${r.confidence} %`)
+			}
+		]
+	})), iaH(Card, {
+		title: "Últimas correcciones",
+		bodyClass: data.applied.length ? "p-0" : void 0
+	}, data.applied.length ? iaH(Table, {
+		rowKey: (r) => r.id + r.at,
+		dense: true,
+		rows: data.applied,
+		columns: [
+			{
+				key: "n",
+				header: "Cliente",
+				render: (r) => r.name
+			},
+			{
+				key: "f",
+				header: "Cambio",
+				render: (r) => iaH("span", { className: "text-[13px]" }, `${r.field}: `, iaH("b", null, r.to))
+			},
+			{
+				key: "b",
+				header: "Por",
+				render: (r) => iaH("span", { className: "text-xs text-muted" }, `${r.by} · ${relative(r.at)}`)
+			}
+		]
+	}) : iaH(Empty, { title: "Todavía no se aplicaron correcciones" }, "Cada corrección queda en la auditoría con el valor anterior."))), iaH(IaEngineNote, null, "Duplicados por nombre, teléfono, ciudad, canal y dominio de correo; normalización de teléfonos (+54 9), correos y nombres; autocompletado desde el contacto y el dominio de la empresa. En producción suma el padrón de ARCA por CUIT y la geocodificación de direcciones."));
+}
+// ───────────── Página ─────────────
+function IntelligencePage() {
+	const [params, setParams] = useSearchParams();
+	const tab = params.get("caso") ?? "resumen";
+	const cliente = params.get("cliente") ?? void 0;
+	const go = (k) => setParams({ caso: k });
+	const tabs = [{
+		key: "resumen",
+		label: "Resumen"
+	}, ...IA_CASES.map((c) => ({
+		key: c.key,
+		label: `${c.n} · ${c.title.replace(/ \(.*\)$/, "").replace("Salud de cuenta y riesgo de fuga", "Salud de cuenta").replace("Calidad de datos automática", "Calidad de datos").replace("Precio y descuento recomendado", "Precio y descuento").replace("Asistente de interacciones", "Interacciones")}`
+	}))];
+	const body = tab === "salud" ? iaH(IaHealth, {
+		key: `s${cliente ?? ""}`,
+		preselect: cliente
+	}) : tab === "nba" ? iaH(IaNba, {
+		key: `n${cliente ?? ""}`,
+		preselect: cliente
+	}) : tab === "interacciones" ? iaH(IaInteractions, {
+		key: `i${cliente ?? ""}`,
+		preselect: cliente
+	}) : tab === "precio" ? iaH(IaPricing, { preselect: params.get("presupuesto") ?? void 0 }) : tab === "calidad" ? iaH(IaQuality, null) : iaH(IaOverview, { go });
+	return iaH("div", null, iaH(PageHeader, {
+		title: "Inteligencia del CRM",
+		subtitle: "Cinco casos de uso sobre los datos de JD Edwards y del CRM · la IA sugiere, la persona decide",
+		badge: iaH(Badge, { tone: "violet" }, iaH(Sparkles, { className: "size-3" }), "Módulo IA"),
+		crumbs: [{
+			label: "Inicio",
+			to: "/"
+		}, { label: "Inteligencia del CRM" }]
+	}), iaH(Tabs, {
+		tabs,
+		value: tab,
+		onChange: go,
+		className: "mb-4"
+	}), body);
+}
+var init_Intelligence = __esmMin((() => {
+	init_lucide_react();
+	init_dist();
+	init_api();
+	init_format();
+	init_session();
+	init_ui();
+	iaR = /* @__PURE__ */ __toESM(require_react(), 1);
+	iaH = iaR.createElement;
+}));
+//#endregion
 //#region src/App.tsx
 init_dist();
 init_ui();
@@ -94123,6 +96583,7 @@ var Assistant = (0, import_react$162.lazy)(() => __vitePreload(() => Promise.res
 var Integration = (0, import_react$162.lazy)(() => __vitePreload(() => Promise.resolve().then(() => (init_Integration(), Integration_exports)), void 0, import.meta.url));
 var Admin = (0, import_react$162.lazy)(() => __vitePreload(() => Promise.resolve().then(() => (init_Admin(), Admin_exports)), void 0, import.meta.url));
 var Coverage = (0, import_react$162.lazy)(() => __vitePreload(() => Promise.resolve().then(() => (init_Coverage(), Coverage_exports)), void 0, import.meta.url));
+var Intelligence = (0, import_react$162.lazy)(() => Promise.resolve().then(() => (init_Intelligence(), { default: IntelligencePage })));
 var Help = (0, import_react$162.lazy)(() => __vitePreload(() => Promise.resolve().then(() => (init_Help(), Help_exports)), void 0, import.meta.url));
 var Router = HashRouter;
 function Protected({ children }) {
@@ -94234,6 +96695,10 @@ function App() {
 				/* @__PURE__ */ (0, import_jsx_runtime$51.jsx)(Route$1, {
 					path: "admin",
 					element: /* @__PURE__ */ (0, import_jsx_runtime$51.jsx)(Admin, {})
+				}),
+				/* @__PURE__ */ (0, import_jsx_runtime$51.jsx)(Route$1, {
+					path: "inteligencia",
+					element: /* @__PURE__ */ (0, import_jsx_runtime$51.jsx)(Intelligence, {})
 				}),
 				/* @__PURE__ */ (0, import_jsx_runtime$51.jsx)(Route$1, {
 					path: "cobertura",
